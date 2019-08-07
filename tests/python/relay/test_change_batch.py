@@ -1,4 +1,3 @@
-#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,9 +14,15 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-PROJROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../../" && pwd )"
+import tvm
+from tvm import relay
+from tvm.relay.testing import resnet
+from tvm.relay import transform
 
+def test_change_batch_resnet():
+    net, params = resnet.get_workload()
+    new_net = transform.ChangeBatch({net["main"].params[0]: 0}, batch_size=123)(net)
+    assert new_net["main"].checked_type.ret_type == relay.TensorType((123, 1000))
 
-export PYTHONPATH=${PYTHONPATH}:${PROJROOT}/python:${PROJROOT}/vta/python
-export PYTHONPATH=${PYTHONPATH}:/home/xilinx/pynq
-python3 -m vta.exec.rpc_server --tracker fleet:9190 --key pynq
+if __name__ == "__main__":
+    test_change_batch_resnet()

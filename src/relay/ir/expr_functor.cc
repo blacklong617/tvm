@@ -212,7 +212,7 @@ Expr ExprMutator::VisitExpr_(const MatchNode* m) {
   for (const Clause& p : m->clauses) {
     clauses.push_back(VisitClause(p));
   }
-  return MatchNode::make(VisitExpr(m->data), clauses);
+  return MatchNode::make(VisitExpr(m->data), clauses, m->complete);
 }
 
 Clause ExprMutator::VisitClause(const Clause& c) {
@@ -435,7 +435,7 @@ Expr Bind(const Expr& expr, const tvm::Map<Var, Expr>& args_map) {
                              func->type_params,
                              func->attrs);
     CHECK_EQ(FreeVars(expr).size(), FreeVars(ret).size());
-    return ret;
+    return std::move(ret);
   } else {
     return ExprBinder(args_map).VisitExpr(expr);
   }

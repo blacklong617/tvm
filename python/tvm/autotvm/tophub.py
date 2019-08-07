@@ -39,12 +39,12 @@ PACKAGE_VERSION = {
     'arm_cpu': "v0.04",
     'llvm':    "v0.03",
 
-    'cuda':    "v0.04",
+    'cuda':    "v0.05",
     'rocm':    "v0.02",
     'opencl':  "v0.02",
     'mali':    "v0.05",
 
-    'vta':     "v0.05",
+    'vta':     "v0.06",
 }
 
 logger = logging.getLogger('autotvm')

@@ -425,7 +425,7 @@ def shape(array, dtype="int32"):
     Parameters
     ----------
     array : tvm.Tensor
-        The source tenosr.
+        The source tensor.
 
     dtype : str, optional
         The target data type.
@@ -477,3 +477,44 @@ def sequence_mask(data, valid_length, mask_value=0, axis=0):
         "only support data.ndim >= 2, received data.shape = {}".format(data.shape)
     assert axis == 0 or axis == 1, "only support axis = 0, 1, received axis = {}".format(axis)
     return cpp.sequence_mask(data, valid_length, mask_value, axis)
+
+
+def ndarray_size(array, dtype="int32"):
+    """Get the number of elements of input array
+
+    Parameters
+    ----------
+    array : tvm.Tensor
+        The source tensor.
+
+    dtype : str, optional
+        The target data type.
+
+    Returns
+    -------
+    result : tvm.Tensor
+        The resulting tensor.
+    """
+    return cpp.ndarray_size(array, dtype)
+
+
+def where(condition, x, y):
+    """Get the elements, either from x or y, depending on the condition.
+
+    Parameters
+    ----------
+    condition : tvm.Tensor
+        The condition array.
+
+    x : tvm.Tensor
+        First array to be selected.
+
+    y : tvm.Tensor
+        Second array to be selected.
+
+    Returns
+    -------
+    result : tvm.Tensor
+        A Tensor selected from x or y depending on condition.
+    """
+    return cpp.where(condition, x, y)
