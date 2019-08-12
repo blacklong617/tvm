@@ -18,7 +18,7 @@
  */
 
 /*!
- *  Copyright (c) 2018 by Contributorstop_k
+ *  Copyright (c) 2018 by Contributors
  * \file nms.cc
  * \brief Non-maximum suppression operators
  */
@@ -90,7 +90,7 @@ bool NMSRel(const Array<Type>& types,
     attrs.as<NonMaximumSuppressionAttrs>();
   const auto& dshape = data->shape;
   const auto& vshape = valid_count->shape;
-  CHECK_EQ(dshape.size(), 3) << "Input data should be 3-D.";//[batch_size, num_anchors, 6]
+  CHECK_EQ(dshape.size(), 3) << "Input data should be 3-D.";
   CHECK_EQ(vshape.size(), 1) << "Input valid count should be 1-D.";
 
   // assign output type
@@ -98,7 +98,7 @@ bool NMSRel(const Array<Type>& types,
     std::vector<IndexExpr> oshape({dshape[0], dshape[1]});
     reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
   } else {
-    reporter->Assign(types[2], TensorTypeNode::make(dshape, data->dtype));//[batch_size, num_anchors, 6]
+    reporter->Assign(types[2], TensorTypeNode::make(dshape, data->dtype));
   }
   return true;
 }
