@@ -163,58 +163,87 @@ def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class,
     output = output_tensor((num_batches * num_class * max_output_boxes_per_class, 3), "int32") 
     output_box = output_tensor((num_batches * num_class * max_output_boxes_per_class, 4), "int32")
     #  score_threshold_const = tvm.const(score_threshold, "float32")
-    
-    #  score 过滤 把比阈值低的score置为-1
-    #  topk num_class num_box 
+      
+    #
+    #  score 
+    #
+    #  sort_score 对每个类的box序列进行了编号，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
+    #  sort_score[batch_id,class_id,re_box_id]
+    sort_score = argsort(scores, axis=2, is_ascend=False)
     if score_threshold >0:
         for i in range(num_batch):
             for j in range(num_class):
                 for k in range(num_box):
                     #  过滤 低于阈值的score
-                    if scores[i,j,k] < score_threshold:
-                        scores[i,j,k] = -1
+                    if scores[i,j,sort_score[i,j,k]] < score_threshold:
+                        sort_score[i,j,k]= -1  # 将score不符合要求的box_id置为-1，表示该box无效，后面处理不考虑
                     #  每个类最多输出的box为max_output_boxes_per_class个
                     #  则这里需要对每个类按照score由大到小进行排序后取前max_output_boxes_per_class个
-    # sort_score 对每个类的box序列进行了编号，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
-    sort_score = argsort(scores, axis=2, is_ascend=False)  
 
-                
 
-    # iou 过滤
-    
+    #
+    #  TopK、IOU
+    #
+    #  iou的过滤之前，先准备需要进行iou计算的boxes，该boxes包含每个batch中每个类别的每个box按分数由大到小排列
+    #  boxes[batch_id,class_id,box_id,4]
+    #  
     for i in range(num_batch):
-        mkeep = max_output_boxes_per_class
+        mkeep = num_box
         # for j in range(num_class):
-        if 0 < num_box < max_output_boxes_per_class:
-            mkeep = num_box
-      
-        for j in range(mkeep):
+        if 0 < max_output_boxes_per_class < num_box:
+            mkeep = max_output_boxes_per_class
+        
+        for c in range(num_class):
 
-            if iou_threshold > 0:
+            for j in range(mkeep):
 
-                box_a_idx = j
-                for k in parallel(num_box):
-                    a_y1 = boxes[batch_idx, box_a_idx, 0]  
-                    a_x1 = boxes[batch_idx, box_a_idx, 1]  
-                    a_y2 = boxes[batch_idx, box_a_idx, 2]  
-                    a_x2 = boxes[batch_idx, box_a_idx, 3]  
-                    box_b_idx = k
+                if iou_threshold > 0:
 
-                    b_y1 = boxes[batch_idx, box_b_idx, 0]
-                    b_x1 = boxes[batch_idx, box_b_idx, 1]
-                    b_y2 = boxes[batch_idx, box_b_idx, 2]
-                    b_x2 = boxes[batch_idx, box_b_idx, 3]
+                    box_a_idx = sort_score[i,c,j]
+                    if box_a_idx >= 0:  # 判断是否有效
 
-                    w = max(0.0, min(a_x2, b_x2) - max(a_x1, b_x1))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
-                    h = max(0.0, min(a_y2, b_y2) - max(a_y1, b_y1))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
-                    area = h * w  # 相交区域面积
-                    u = (a_x2 - a_x1) * (a_y2 - a_y1) + (b_x2 - b_x1) * (b_y2 - b_y1) - area  # 两个box相并后面积
-                    iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
-                    if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
-                        output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
-                        if id_index >= 0:  # 如果有class_id,把class_id置为-1
-                            output[i, k, id_index] = -1.0
-                        box_indices[i, k] = -1
+                        for k in parallel(mkeep):
+                            check_iou = 0
+                            box_b_idx = sort_score[i,c,k]
+                            if k > j and box_b_idx >= 0:
+                                check_iou = 1
+
+                            if check_iou > 0:
+
+                                a_y1 = boxes[i, box_a_idx, 0]  
+                                a_x1 = boxes[i, box_a_idx, 1]  
+                                a_y2 = boxes[i, box_a_idx, 2]  
+                                a_x2 = boxes[i, box_a_idx, 3]  
+                                
+                                b_y1 = boxes[i, box_b_idx, 0]
+                                b_x1 = boxes[i, box_b_idx, 1]
+                                b_y2 = boxes[i, box_b_idx, 2]
+                                b_x2 = boxes[i, box_b_idx, 3]
+
+                                w = max(0.0, min(a_x2, b_x2) - max(a_x1, b_x1))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
+                                h = max(0.0, min(a_y2, b_y2) - max(a_y1, b_y1))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
+                                area = h * w  # 相交区域面积
+                                u = (a_x2 - a_x1) * (a_y2 - a_y1) + (b_x2 - b_x1) * (b_y2 - b_y1) - area  # 两个box相并后面积
+                                iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
+                                if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
+                                    # output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
+                                    # if id_index >= 0:  # 如果有class_id,把class_id置为-1
+                                    #     output[i, k, id_index] = -1.0
+                                    # box_indices[i, k] = -1
+                                    sort_score[i,c,k] = -1  # 将该box_id置为-1，表示对应的box无效（iou抑制）
+
+    # for i in range(num_batch):
+
+    #     for j in range(num_class):
+
+    #         for k in range(num_box):
+
+    #             if sort_score[i,j,k]<0:
+    #                 # 无效过滤
+    #                 pass
+
+
+    output = sort_score               
 
     return output
 
