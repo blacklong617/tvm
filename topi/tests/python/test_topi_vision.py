@@ -126,6 +126,51 @@ def verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_re
     for device in ['llvm', 'cuda', 'opencl']:
         check_device(device)
 
+def verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, iou_threshold,
+                               force_suppress, top_k, coord_start, score_index, id_index):
+    dshape = np_data.shape
+    batch, num_anchors, _ = dshape
+    indices_dshape = (batch, num_anchors)
+    data = tvm.placeholder(dshape, name="data")
+    valid_count = tvm.placeholder((batch,), dtype="int32", name="valid_count")
+
+    def check_device(device):
+        ctx = tvm.context(device, 0)
+        if not ctx.exist:
+            print("Skip because %s is not enabled" % device)
+            return
+        print("Running on target: %s" % device)
+        with tvm.target.create(device):
+            if device == 'llvm':
+                out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+                                          coord_start=coord_start, score_index=score_index, id_index=id_index,
+                                          return_indices=False)
+                indices_out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+                                                  coord_start=coord_start, score_index=score_index, id_index=id_index)
+            else:
+                out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+                                                    coord_start=coord_start, score_index=score_index, id_index=id_index,
+                                                    return_indices=False)
+                indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+                                                            coord_start=coord_start, score_index=score_index, id_index=id_index)
+            s = topi.generic.schedule_nms(out)
+            indices_s = topi.generic.schedule_nms(indices_out)
+
+        tvm_data = tvm.nd.array(np_data, ctx)
+        tvm_valid_count = tvm.nd.array(np_valid_count, ctx)
+
+        tvm_out = tvm.nd.array(np.zeros(dshape, dtype=data.dtype), ctx)
+        f = tvm.build(s, [data, valid_count, out], device)
+        f(tvm_data, tvm_valid_count, tvm_out)
+        tvm.testing.assert_allclose(tvm_out.asnumpy(), np_result, rtol=1e-4)
+
+        tvm_indices_out = tvm.nd.array(np.zeros(indices_dshape, dtype="int32"), ctx)
+        f = tvm.build(indices_s, [data, valid_count, indices_out], device)
+        f(tvm_data, tvm_valid_count, tvm_indices_out)
+        tvm.testing.assert_allclose(tvm_indices_out.asnumpy(), np_indices_result, rtol=1e-4)
+
+    for device in ['llvm', 'cuda', 'opencl']:
+        check_device(device)
 
 def test_non_max_suppression():
     np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
@@ -149,6 +194,27 @@ def test_non_max_suppression():
     np_indices_result = np.array([[3, 0, -1, -1, -1]])
     verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
 
+def test_onnx_non_max_suppression():
+    np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
+                         [0, 0.4, 4, 21, 19, 40], [2, 0.9, 35, 61, 52, 79],
+                         [1, 0.5, 100, 60, 70, 110]]]).astype("float32")
+    np_valid_count = np.array([4]).astype("int32")
+    np_result = np.array([[[2, 0.9, 35, 61, 52, 79], [0, 0.8, 1, 20, 25, 45],
+                           [-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1],
+                           [-1, -1, -1, -1, -1, -1]]])
+    np_indices_result = np.array([[3, 0, -1, -1, -1]])
+
+    verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, True, 2, 2, 1, 0)
+
+    # np_data = np.array([[[0.8, 1, 20, 25, 45], [0.7, 30, 60, 50, 80],
+    #                      [0.4, 4, 21, 19, 40], [0.9, 35, 61, 52, 79],
+    #                      [0.5, 100, 60, 70, 110]]]).astype("float32")
+    # np_valid_count = np.array([4]).astype("int32")
+    # np_result = np.array([[[0.9, 35, 61, 52, 79], [0.8, 1, 20, 25, 45],
+    #                        [-1, -1, -1, -1, -1], [-1, -1, -1, -1, -1],
+    #                        [-1, -1, -1, -1, -1]]])
+    # np_indices_result = np.array([[3, 0, -1, -1, -1]])
+    # verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
 
 
 def verify_multibox_prior(dshape, sizes=(1,), ratios=(1,), steps=(-1, -1), offsets=(0.5, 0.5), clip=False):
