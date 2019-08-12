@@ -21,7 +21,7 @@ from tvm import api
 from .util import get_const_tuple
 
 @tvm.target.generic_func
-def argsort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32"):
+def argsort(data, valid_count=None, axis=-1, is_ascend=False, dtype="float32"):
     """Performs sorting along the given axis and returns an array
     of indices having the same shape as an input array that index
     data in sorted order.

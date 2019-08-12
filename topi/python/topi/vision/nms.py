@@ -145,6 +145,80 @@ def get_valid_counts(data, score_threshold=0, id_index=0, score_index=1):
                                    id_index_const, score_index_const)
 
 
+# add by lxz for onnx nms at 20190808
+@hybrid.script
+def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class, 
+                iou_threshold, score_threshold):
+    """
+    boxes: [num_batches, spatial_dimension, 4]  coordinates 4  data [y1,x1,y2,x2]
+    scores: [num_batches, num_classes, spatial_dimension]  
+    spatial_dimension：每个batch中每个类别score的个数
+
+    output: [num_selected_indices, 3]  coordinates 3  data [batch_index, class_index, box_index]
+
+    """
+    num_batch = boxes.shape[0]
+    num_box = boxes.shape[1]
+    num_class = scores.shape[1]
+    output = output_tensor((num_batches * num_class * max_output_boxes_per_class, 3), "int32") 
+    output_box = output_tensor((num_batches * num_class * max_output_boxes_per_class, 4), "int32")
+    #  score_threshold_const = tvm.const(score_threshold, "float32")
+    
+    #  score 过滤 把比阈值低的score置为-1
+    #  topk num_class num_box 
+    if score_threshold >0:
+        for i in range(num_batch):
+            for j in range(num_class):
+                for k in range(num_box):
+                    #  过滤 低于阈值的score
+                    if scores[i,j,k] < score_threshold:
+                        scores[i,j,k] = -1
+                    #  每个类最多输出的box为max_output_boxes_per_class个
+                    #  则这里需要对每个类按照score由大到小进行排序后取前max_output_boxes_per_class个
+    # sort_score 对每个类的box序列进行了编号，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
+    sort_score = argsort(scores, axis=2, is_ascend=False)  
+
+                
+
+    # iou 过滤
+    
+    for i in range(num_batch):
+        mkeep = max_output_boxes_per_class
+        # for j in range(num_class):
+        if 0 < num_box < max_output_boxes_per_class:
+            mkeep = num_box
+      
+        for j in range(mkeep):
+
+            if iou_threshold > 0:
+
+                box_a_idx = j
+                for k in parallel(num_box):
+                    a_y1 = boxes[batch_idx, box_a_idx, 0]  
+                    a_x1 = boxes[batch_idx, box_a_idx, 1]  
+                    a_y2 = boxes[batch_idx, box_a_idx, 2]  
+                    a_x2 = boxes[batch_idx, box_a_idx, 3]  
+                    box_b_idx = k
+
+                    b_y1 = boxes[batch_idx, box_b_idx, 0]
+                    b_x1 = boxes[batch_idx, box_b_idx, 1]
+                    b_y2 = boxes[batch_idx, box_b_idx, 2]
+                    b_x2 = boxes[batch_idx, box_b_idx, 3]
+
+                    w = max(0.0, min(a_x2, b_x2) - max(a_x1, b_x1))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
+                    h = max(0.0, min(a_y2, b_y2) - max(a_y1, b_y1))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
+                    area = h * w  # 相交区域面积
+                    u = (a_x2 - a_x1) * (a_y2 - a_y1) + (b_x2 - b_x1) * (b_y2 - b_y1) - area  # 两个box相并后面积
+                    iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
+                    if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
+                        output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
+                        if id_index >= 0:  # 如果有class_id,把class_id置为-1
+                            output[i, k, id_index] = -1.0
+                        box_indices[i, k] = -1
+
+    return output
+
+
 @hybrid.script
 def hybrid_nms(data, sorted_index, valid_count,
                max_output_size, iou_threshold, force_suppress,
@@ -191,69 +265,79 @@ def hybrid_nms(data, sorted_index, valid_count,
     output : tvm.Tensor
         3-D tensor with shape [batch_size, num_anchors, 6].
 
-    box_indices: tvm.Tensor
+    box_indices: tvm.Tensorbatch_size
         2-D tensor with shape [batch_size, num_anchors].
     """
-    batch_size = data.shape[0]
-    num_anchors = data.shape[1]
-    box_data_length = data.shape[2]
-    box_indices = output_tensor((batch_size, num_anchors), "int32")
+    batch_size = data.shape[0]  # 取出input data 中 batch_size 
+    num_anchors = data.shape[1]  # 取出input data 中 anchor的数目
+    box_data_length = data.shape[2]  # 取出input data 中 每个box的参数的个数
+    box_indices = output_tensor((batch_size, num_anchors), "int32")  # 构造需要输出的tensor之一
     output = output_tensor((batch_size,
                             num_anchors,
                             box_data_length,),
-                           data.dtype)
-
+                           data.dtype)  # 构造需要输出的tensor之一
+    # 外循环为处理不同batch
     for i in range(batch_size):
-        if iou_threshold > 0:
-            if valid_count[i] > 0:
+        if iou_threshold > 0:  # 判断iou阈值是否大于零
+            if valid_count[i] > 0:  # 判断当前batch的有效框是否大于零
                 # Reorder output
-                nkeep = valid_count[i]
-                if 0 < top_k < nkeep:
-                    nkeep = top_k
-                for j in parallel(nkeep):
-                    for k in range(box_data_length):
-                        output[i, j, k] = data[i, sorted_index[i, j], k]
-                    box_indices[i, j] = sorted_index[i, j]
-                if 0 < top_k < valid_count[i]:
-                    for j in parallel(valid_count[i] - nkeep):
+                nkeep = valid_count[i]  # 取出当前batch的有效框个数
+                if 0 < top_k < nkeep:  # 如果top_k的值小于当前batch有效框个数
+                    nkeep = top_k  # 接下来的处理以top_k的值来处理
+                for j in parallel(nkeep):  # 并行化处理每个batch的框
+                    for k in range(box_data_length):  # 处理每个框的每个数据
+                        output[i, j, k] = data[i, sorted_index[i, j], k]  # 取出boxes的data，按照score取前几个我们需要的个数
+                    box_indices[i, j] = sorted_index[i, j]  # 记录box的索引信息[batch_index,box_index]
+                if 0 < top_k < valid_count[i]:  # 这句应该是多余的，可以与上面的合并
+                    for j in parallel(valid_count[i] - nkeep):  # 将output其他的位置（top_k以外）置为-1
                         for k in range(box_data_length):
                             output[i, j + nkeep, k] = -1.0
-                        box_indices[i, j + nkeep] = -1
+                        box_indices[i, j + nkeep] = -1  # 将box_indice输出的其他位置置为-1
             # Apply nms
-            box_start_idx = coord_start
+            box_start_idx = coord_start  # 
             batch_idx = i
-            for j in range(valid_count[i]):
+            for j in range(valid_count[i]):  # 处理每个有效的box
+                # output[i, j, score_index] > 0  output中box的score大于零
+                # id_index < 0  输入的id_index 小于零 即不需要class
+                # output[i, j, id_index] >= 0  class_id 大于等于零
                 if output[i, j, score_index] > 0 and (id_index < 0 or output[i, j, id_index] >= 0):
                     box_a_idx = j
+                    # 处理box的 IOU
                     for k in parallel(valid_count[i]):
                         check_iou = 0
+                        #  output[i, k, score_index] > 0 output中box的sco大于零
+                        #  (id_index < 0 or output[i, k, id_index] >= 0) 输出不需要class或者class_id 大于等于零
                         if k > j and output[i, k, score_index] > 0 \
                                 and (id_index < 0 or output[i, k, id_index] >= 0):
+                            # 如果 force_suppress为 True
+                            # 如果 不需要class或者两个为同一个class
+                            # 即当force_suppress为True时或者id_index为-1时又或者两个要操作的box为同一个class时
                             if force_suppress:
                                 check_iou = 1
                             elif id_index < 0 or output[i, j, id_index] == output[i, k, id_index]:
                                 check_iou = 1
                         if check_iou > 0:
-                            a_l = output[batch_idx, box_a_idx, box_start_idx]
-                            a_t = output[batch_idx, box_a_idx, box_start_idx + 1]
-                            a_r = output[batch_idx, box_a_idx, box_start_idx + 2]
-                            a_b = output[batch_idx, box_a_idx, box_start_idx + 3]
+                            a_l = output[batch_idx, box_a_idx, box_start_idx]  #x1
+                            a_t = output[batch_idx, box_a_idx, box_start_idx + 1]  #y1
+                            a_r = output[batch_idx, box_a_idx, box_start_idx + 2]  #x2
+                            a_b = output[batch_idx, box_a_idx, box_start_idx + 3]  #y2
                             box_b_idx = k
                             b_t = output[batch_idx, box_b_idx, box_start_idx + 1]
                             b_b = output[batch_idx, box_b_idx, box_start_idx + 3]
                             b_l = output[batch_idx, box_b_idx, box_start_idx]
                             b_r = output[batch_idx, box_b_idx, box_start_idx + 2]
-                            w = max(0.0, min(a_r, b_r) - max(a_l, b_l))
-                            h = max(0.0, min(a_b, b_b) - max(a_t, b_t))
-                            area = h * w
-                            u = (a_r - a_l) * (a_b - a_t) + (b_r - b_l) * (b_b - b_t) - area
-                            iou = 0.0 if u <= 0.0 else area / u
-                            if iou >= iou_threshold:
-                                output[i, k, score_index] = -1.0
-                                if id_index >= 0:
+                            w = max(0.0, min(a_r, b_r) - max(a_l, b_l))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
+                            h = max(0.0, min(a_b, b_b) - max(a_t, b_t))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
+                            area = h * w  # 相交区域面积
+                            u = (a_r - a_l) * (a_b - a_t) + (b_r - b_l) * (b_b - b_t) - area  # 两个box相并后面积
+                            iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
+                            if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
+                                output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
+                                if id_index >= 0:  # 如果有class_id,把class_id置为-1
                                     output[i, k, id_index] = -1.0
                                 box_indices[i, k] = -1
         else:
+            #iou 小于零，则不处理iou直接输出有效个box
             for j in parallel(valid_count[i]):
                 for k in range(box_data_length):
                     output[i, j, k] = data[i, j, k]
@@ -318,11 +402,11 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
         Whether to return box indices in input data.
 
     invalid_to_bottom : optional, boolean
-        Whether to move all valid bounding boxes to the top.
+        Whether to mbox_leftid bounding boxes to the top.
 
     Returns
     -------
-    out : tvm.Tensor
+    out : tvm.Tensorbox_left
         3-D tensor with shape [batch_size, num_anchors, 6].
 
     Example
