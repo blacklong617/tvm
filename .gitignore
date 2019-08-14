@@ -232,3 +232,6 @@ conda/pkg
 # antlr files
 *.tokens
 *.interp
+
+# install env
+update_env.sh

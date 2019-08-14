@@ -145,33 +145,30 @@ def get_valid_counts(data, score_threshold=0, id_index=0, score_index=1):
                                    id_index_const, score_index_const)
 
 
-# add by lxz for onnx nms at 20190808
+# add by lxz for onnx nms at 20190814
 @hybrid.script
-def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class, 
+def hybrid_onnx_nms(boxes, scores, sort_score, center_point_box_const,max_output_boxes_per_class, 
                 iou_threshold, score_threshold):
     """
     boxes: [num_batches, spatial_dimension, 4]  coordinates 4  data [y1,x1,y2,x2]
     scores: [num_batches, num_classes, spatial_dimension]  
     spatial_dimension：每个batch中每个类别score的个数
-
     output: [num_selected_indices, 3]  coordinates 3  data [batch_index, class_index, box_index]
 
     """
-    num_batch = boxes.shape[0]
+    
+    num_batches = boxes.shape[0]
     num_box = boxes.shape[1]
     num_class = scores.shape[1]
-    output = output_tensor((num_batches * num_class * max_output_boxes_per_class, 3), "int32") 
-    output_box = output_tensor((num_batches * num_class * max_output_boxes_per_class, 4), "int32")
-    #  score_threshold_const = tvm.const(score_threshold, "float32")
-      
+    output_shape0= num_batches * num_class * max_output_boxes_per_class
+    output = output_tensor((output_shape0, 3), "int32") 
+    
     #
     #  score 
     #
-    #  sort_score 对每个类的box序列进行了编号，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
-    #  sort_score[batch_id,class_id,re_box_id]
-    sort_score = argsort(scores, axis=2, is_ascend=False)
+    #output，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
     if score_threshold >0:
-        for i in range(num_batch):
+        for i in range(num_batches):
             for j in range(num_class):
                 for k in range(num_box):
                     #  过滤 低于阈值的score
@@ -180,29 +177,40 @@ def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class,
                     #  每个类最多输出的box为max_output_boxes_per_class个
                     #  则这里需要对每个类按照score由大到小进行排序后取前max_output_boxes_per_class个
 
+    box_id = 0
+    for i in range(num_batches):
+        
+        for j in range(num_class):
 
+            for k in range(max_output_boxes_per_class):
+                # sort_score[i,j,k]>=0 and    
+                output[box_id,0] = -1
+                output[box_id,1] = -1
+                output[box_id,2] = -1
+                box_id = box_id + 1
+    
     #
     #  TopK、IOU
     #
     #  iou的过滤之前，先准备需要进行iou计算的boxes，该boxes包含每个batch中每个类别的每个box按分数由大到小排列
     #  boxes[batch_id,class_id,box_id,4]
     #  
-    for i in range(num_batch):
+    for i in range(num_batches):
         mkeep = num_box
         # for j in range(num_class):
-        if 0 < max_output_boxes_per_class < num_box:
-            mkeep = max_output_boxes_per_class
+
+        # if 0 < max_output_boxes_per_class < num_box:
+        #     mkeep = max_output_boxes_per_class
         
         for c in range(num_class):
 
             for j in range(mkeep):
 
                 if iou_threshold > 0:
-
                     box_a_idx = sort_score[i,c,j]
                     if box_a_idx >= 0:  # 判断是否有效
 
-                        for k in parallel(mkeep):
+                        for k in range(mkeep):
                             check_iou = 0
                             box_b_idx = sort_score[i,c,k]
                             if k > j and box_b_idx >= 0:
@@ -220,30 +228,58 @@ def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class,
                                 b_y2 = boxes[i, box_b_idx, 2]
                                 b_x2 = boxes[i, box_b_idx, 3]
 
-                                w = max(0.0, min(a_x2, b_x2) - max(a_x1, b_x1))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
-                                h = max(0.0, min(a_y2, b_y2) - max(a_y1, b_y1))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
+                                w = max(0.0, min(max(a_x1,a_x2),max(b_x1,b_x2))-max(min(a_x1,a_x2),min(b_x1,b_x2)))
+                                h = max(0.0, min(max(a_y1,a_y2),max(b_y1,b_y2))-max(min(a_y1,a_y2),min(b_y1,b_y2)))
+
                                 area = h * w  # 相交区域面积
-                                u = (a_x2 - a_x1) * (a_y2 - a_y1) + (b_x2 - b_x1) * (b_y2 - b_y1) - area  # 两个box相并后面积
+                                # if area <0:
+                                #     area = -(area)
+                                sa = (a_x2 - a_x1) * (a_y2 - a_y1)
+                                sb = (b_x2 - b_x1) * (b_y2 - b_y1)
+
+                                if sa < 0:
+                                    sa = -sa
+                                if sb < 0:
+                                    sb = -sb    
+
+                                u = sa + sb - area  # 两个box相并后面积
+                                # u = (max(a_x1,a_x2)-min(a_x1,a_x2))*(max(a_y1,a_y2)-min(a_y1,a_y2))+(max(b_x1,b_x2)-min(b_x1,b_x2))*(max(b_y1,b_y2)-min(b_y1,b_y2))-area
                                 iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
-                                if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
+                                if iou > iou_threshold:  # 如果重合百分比大于等于阈值
                                     # output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
                                     # if id_index >= 0:  # 如果有class_id,把class_id置为-1
                                     #     output[i, k, id_index] = -1.0
                                     # box_indices[i, k] = -1
                                     sort_score[i,c,k] = -1  # 将该box_id置为-1，表示对应的box无效（iou抑制）
 
-    # for i in range(num_batch):
+    box_id = 0
+    for a in range(num_batches):
+        
+        for b in range(num_class):
+            per_class = 0
+            for c in range(num_box):
+                # sort_score[i,j,k]>=0 and
+                if  sort_score[a,b,c]>=0 and box_id < output_shape0 and per_class < max_output_boxes_per_class:
+                    output[box_id,0] = a
+                    output[box_id,1] = b
+                    output[box_id,2] = sort_score[a,b,c]
+                    box_id = box_id + 1
+                    per_class = per_class+1
 
-    #     for j in range(num_class):
-
-    #         for k in range(num_box):
-
-    #             if sort_score[i,j,k]<0:
-    #                 # 无效过滤
-    #                 pass
-
-
-    output = sort_score               
+    # debug for show all sorted score
+    # box_id = 0
+    # for a in range(num_batches):
+        
+    #     for b in range(num_class):
+    #         per_class = 0
+    #         for c in range(num_box):
+    #             # sort_score[i,j,k]>=0 and
+    #             #if  sort_score[a,b,c]>=0 and box_id < shape_dim0 and per_class < max_output_boxes_per_class:
+    #             output[box_id,0] = a
+    #             output[box_id,1] = b
+    #             output[box_id,2] = sort_score[a,b,c]
+    #             box_id = box_id + 1
+    #             per_class = per_class+1
 
     return output
 
@@ -479,3 +515,51 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
         out = hybrid_rearrange_out(out)
 
     return box_indices if return_indices else out
+
+# # add by lizhijian
+# @hybrid.script
+# def hybrid_onnx_nms(boxes, scores, 
+#                     center_point_box,
+#                     max_output_boxes_per_class,
+#                     iou_threshold,
+#                     score_threshold):
+#     shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
+#     output = output_tensor((shape_dim0,3), "int32")
+#     #output = 1
+#     return output
+
+# # @tvm.target.generic_func
+# # def onnx_nms(boxes, scores, 
+# #              center_point_box=0,
+# #              max_output_boxes_per_class=-1,
+# #              iou_threshold=0.5,
+# #              score_threshold=0.0):
+# #     center_point_box_const = tvm.const(center_point_box, "int32")
+# #     max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
+# #     iou_threshold_const = tvm.const(iou_threshold, "float32")
+# #     score_threshold_const = tvm.const(score_threshold, "float32")
+# #     return hybrid_onnx_nms(boxes, scores, 
+# #                             center_point_box_const, 
+# #                             max_output_boxes_per_class_const,
+# #                             iou_threshold_const,
+# #                             score_threshold_const)
+
+@tvm.target.generic_func
+def onnx_nms(boxes, scores, 
+             center_point_box=0,
+             max_output_boxes_per_class=-1,
+             iou_threshold=0.5,
+             score_threshold=0.0):
+    center_point_box_const = tvm.const(center_point_box, "int32")
+    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
+    iou_threshold_const = tvm.const(iou_threshold, "float32")
+    score_threshold_const = tvm.const(score_threshold, "float32")
+    sort_score = argsort(scores,axis=2, is_ascend=False,dtype="int32")
+    print('sort_score:{}'.format(sort_score))
+    print('boxes:{}'.format(boxes))
+    print('scores:{}'.format(scores))
+    return hybrid_onnx_nms(boxes, scores,sort_score, 
+                            center_point_box_const,
+                            max_output_boxes_per_class_const,
+                            iou_threshold_const,
+                            score_threshold_const)

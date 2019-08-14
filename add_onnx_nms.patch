@@ -1,0 +1,371 @@
+diff --git a/.gitignore b/.gitignore
+index f044577a..0739a5ac 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -231,4 +231,7 @@ conda/pkg
+ 
+ # antlr files
+ *.tokens
+-*.interp
+\ No newline at end of file
++*.interp
++
++# install env
++update_env.sh
+diff --git a/include/tvm/relay/attrs/vision.h b/include/tvm/relay/attrs/vision.h
+index b98bbfc5..455782b8 100644
+--- a/include/tvm/relay/attrs/vision.h
++++ b/include/tvm/relay/attrs/vision.h
+@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
+   }
+ };
+ 
++//add by lizhijian
++/*! \brief Attributes used in nms onnx operator */
++struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
++	int center_point_box;
++  int max_output_boxes_per_class;
++  double iou_threshold;
++  double score_threshold;
++
++	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
++		TVM_ATTR_FIELD(center_point_box).set_default(0)
++		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
++    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
++    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
++    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
++    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
++    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
++    .describe("Float representing the threshold for deciding when to remove boxes based on score");
++	}
++};
++
+ /*! \brief Attributes used in non_maximum_suppression operator */
+ struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
+   int max_output_size;
+diff --git a/python/tvm/_ffi/base.py b/python/tvm/_ffi/base.py
+index c61c5c44..f58185b8 100644
+--- a/python/tvm/_ffi/base.py
++++ b/python/tvm/_ffi/base.py
+@@ -49,6 +49,7 @@ else:
+ def _load_lib():
+     """Load libary by searching possible path."""
+     lib_path = libinfo.find_lib_path()
++    print(f'_load_lib path is {lib_path}')
+     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+     # DMatrix functions
+     lib.TVMGetLastError.restype = ctypes.c_char_p
+diff --git a/python/tvm/_ffi/function.py b/python/tvm/_ffi/function.py
+index 4bb31820..817a5649 100644
+--- a/python/tvm/_ffi/function.py
++++ b/python/tvm/_ffi/function.py
+@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
+     target_module_name : str
+        The target module name if different from namespace
+     """
++    print(f'_init_api name is {target_module_name}')
+     target_module_name = (
+         target_module_name if target_module_name else namespace)
+     if namespace.startswith("tvm."):
+diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
+index 1b904bba..47434ac9 100644
+--- a/python/tvm/relay/frontend/onnx.py
++++ b/python/tvm/relay/frontend/onnx.py
+@@ -850,6 +850,18 @@ class ConstantFill(OnnxOpConverter):
+             shape = shape + attr.pop('extra_shape')
+         return _op.full(inputs[0], shape)
+ 
++# add by lizhijian
++class NMS(OnnxOpConverter):
++    @classmethod
++    def _impl_v10(cls, inputs, attr, params):
++        new_attrs={}
++        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
++        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
++        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
++        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
++        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
++
++        
+ # compatible operators that do NOT require any conversion.
+ _identity_list = []
+ 
+@@ -964,6 +976,9 @@ def _get_convert_map(opset):
+         'Unsqueeze': Unsqueeze.get_converter(opset),
+         'Pad': Pad.get_converter(opset),
+         'Shape': Shape.get_converter(opset),
++
++        # def/vision
++        'NonMaxSuppression': NMS.get_converter(opset),
+     }
+ 
+ 
+diff --git a/python/tvm/relay/op/op_attrs.py b/python/tvm/relay/op/op_attrs.py
+index d46be126..49bb056a 100644
+--- a/python/tvm/relay/op/op_attrs.py
++++ b/python/tvm/relay/op/op_attrs.py
+@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
+     """Attributes for vision.non_maximum_suppression"""
+ 
+ 
++# add by lizhijian
++@register_relay_attr_node
++class OnnxNMSAttrs(Attrs):
++    """Attributes for vision.onnx_nms"""
++
++
+ @register_relay_attr_node
+ class ROIAlignAttrs(Attrs):
+     """Attributes for vision.roi_align"""
+diff --git a/python/tvm/relay/op/vision/_vision.py b/python/tvm/relay/op/vision/_vision.py
+index 7de11807..51b8c159 100644
+--- a/python/tvm/relay/op/vision/_vision.py
++++ b/python/tvm/relay/op/vision/_vision.py
+@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
+ 
+ 
+ reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
++
++# add by lizhijian
++# onnx nms
++@reg.register_schedule("vison.onnx_nms")
++def schedule_onnx_nms(_, outs, target):
++    """Schedule definition of onnx nms"""
++    with target:
++        return topi.generic.schedule_onnxnms(outs)
++
++
++@reg.register_compute("vision.onnx_nms")
++def compute_nms(attrs, inputs, _, target):
++    """Compute definition of onnx nms"""
++    center_point_box = get_const_int(attrs.center_point_box)
++    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
++    iou_threshold = get_const_float(attrs.iou_threshold)
++    score_threshold = get_const_float(attrs.score_threshold)
++    return [
++        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
++    ]
++
++
++reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)
+diff --git a/python/tvm/relay/op/vision/nms.py b/python/tvm/relay/op/vision/nms.py
+index d19dde30..04a2ee9e 100644
+--- a/python/tvm/relay/op/vision/nms.py
++++ b/python/tvm/relay/op/vision/nms.py
+@@ -112,3 +112,11 @@ def non_max_suppression(data,
+                                      iou_threshold, force_suppress, top_k,
+                                      coord_start, score_index, id_index,
+                                      return_indices, invalid_to_bottom)
++
++def onnx_nms(boxes, 
++            scores, 
++            center_point_box=0, 
++            max_output_boxes_per_class=-1, 
++            iou_threshold=0.5, 
++            score_threshold=0.0):
++    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
+index c0160e7d..1f721f06 100644
+--- a/src/relay/op/vision/nms.cc
++++ b/src/relay/op/vision/nms.cc
+@@ -145,5 +145,57 @@ Set id_index to be -1 to ignore class_id axis.
+ .set_support_level(5)
+ .add_type_rel("NMS", NMSRel);
+ 
++//add by lizhijian
++TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
++
++bool OnnxNMSRel(const Array<Type>& types,
++					int num_inputs,
++					const Attrs& attrs,
++					const TypeReporter& reporter){
++  std::cout<<"OnnxNMSReal"<<std::endl;
++	CHECK_EQ(types.size(), 3);
++	const auto* boxes = types[0].as<TensorTypeNode>();
++	const auto* scores = types[1].as<TensorTypeNode>();
++
++	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
++  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
++
++	const auto& boxesshape = boxes->shape;
++	const auto& scoresshape = scores->shape;
++
++	// assign output type
++  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
++	reporter->Assign(types[3], TensorTypeNode::make(oshape, Int(32)));
++	return true;
++};
++
++Expr MakeOnnxNMS(Expr boxes,
++					Expr scores,
++          int center_point_box,
++					int max_output_boxes_per_class,
++					double iou_threshold,
++					double score_threshold){
++  std::cout<<"MakeOnnxNMS"<<std::endl;
++	auto attrs = make_node<OnnxNMSAttrs>();
++	attrs->center_point_box = center_point_box;
++  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
++  attrs->iou_threshold = iou_threshold;
++  attrs->score_threshold = score_threshold;
++	static const Op& op = Op::Get("vision.onnx_nms");
++	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
++}
++
++TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
++.set_body_typed(MakeOnnxNMS);
++
++RELAY_REGISTER_OP("vision.onnx_nms")
++.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
++.set_num_inputs(2)
++.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
++.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
++.set_support_level(5)
++.add_type_rel("ONMS", OnnxNMSRel);
++
++
+ }  // namespace relay
+ }  // namespace tvm
+diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
+index d4099601..3707256e 100644
+--- a/tests/python/frontend/onnx/test_forward.py
++++ b/tests/python/frontend/onnx/test_forward.py
+@@ -1116,15 +1116,57 @@ def test_inception():
+ # def test_shufflenetv2():
+ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
+ 
++# add by lizhijian
++def test_forward_nms():
++    node = onnx.helper.make_node(
++    'NonMaxSuppression',
++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
++    outputs=['selected_indices'],
++    center_point_box=0,
++    )
++    boxes = np.array([[
++    [0.0, 0.0, 1.0, 1.0],
++    [0.0, 0.1, 1.0, 1.1],
++    [0.0, -0.1, 1.0, 0.9],
++    [0.0, 10.0, 1.0, 11.0],
++    [0.0, 10.1, 1.0, 11.1],
++    [0.0, 100.0, 1.0, 101.0]
++    ]]).astype(np.float32)
++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
++                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
++    iou_threshold = np.array([0.5]).astype(np.float32)
++    score_threshold = np.array([0.0]).astype(np.float32)
++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
++
++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
++
++    graph = onnx.helper.make_graph([node],'NMS_test',
++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
++    model = helper.make_model(graph, producer_name='NMS_test')
++    onnx.save_model(model,'/mnt/f/nms.onnx')
++    for target, ctx in ctx_list():
++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
++        print(tvm_out)
++
+ 
+ if __name__ == '__main__':
++    test_forward_nms()
+     test_flatten()
+     test_reshape()
+     test_shape()
+     test_power()
+     test_squeeze()
+     test_unsqueeze()
+-    test_slice()
++    #test_slice()
+     test_floor()
+     test_ceil()
+     test_clip()
+diff --git a/topi/python/topi/generic/vision.py b/topi/python/topi/generic/vision.py
+index a1e096a8..4aa427b5 100644
+--- a/topi/python/topi/generic/vision.py
++++ b/topi/python/topi/generic/vision.py
+@@ -86,6 +86,24 @@ def schedule_nms(outs):
+     """
+     return _default_schedule(outs, False)
+ 
++# add by lizhijian
++@tvm.target.generic_func
++def schedule_onnxnms(outs):
++  """Schedule for onnx nms
++
++  Parameters
++  ----------
++  outs: Array of Tensor
++      The computation graph description of nms
++      in the format of an array of tensors.
++
++    Returns
++    -------
++    s: Schedule
++      The computation schedule for the op.
++  """
++  return _default_schedule(outs,False)
++
+ @tvm.target.generic_func
+ def schedule_multibox_prior(outs):
+     """Schedule for multibox_prior
+diff --git a/topi/python/topi/vision/nms.py b/topi/python/topi/vision/nms.py
+index a6ba56ee..06b966ed 100644
+--- a/topi/python/topi/vision/nms.py
++++ b/topi/python/topi/vision/nms.py
+@@ -366,3 +366,32 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
+         out = hybrid_rearrange_out(out)
+ 
+     return box_indices if return_indices else out
++
++# add by lizhijian
++@hybrid.script
++def hybrid_onnx_nms(boxes, scores, 
++                    center_point_box,
++                    max_output_boxes_per_class,
++                    iou_threshold,
++                    score_threshold):
++    shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
++    output = output_tensor((shape_dim0,3), "int32")
++    output = 1
++
++    return output
++
++@tvm.target.generic_func
++def onnx_nms(boxes, scores, 
++             center_point_box=0,
++             max_output_boxes_per_class=-1,
++             iou_threshold=0.5,
++             score_threshold=0.0):
++    center_point_box_const = tvm.const(center_point_box, "int32")
++    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
++    iou_threshold_const = tvm.const(iou_threshold, "float32")
++    score_threshold_const = tvm.const(score_threshold, "float32")
++    return hybrid_onnx_nms(boxes, scores, 
++                            center_point_box_const, 
++                            max_output_boxes_per_class_const,
++                            iou_threshold_const,
++                            score_threshold_const)
+\ No newline at end of file
+diff --git a/topi/tests/python/test_topi_vision.py b/topi/tests/python/test_topi_vision.py
+index 08b6d2e7..45e908e7 100644
+--- a/topi/tests/python/test_topi_vision.py
++++ b/topi/tests/python/test_topi_vision.py
+@@ -24,7 +24,7 @@ import topi.testing
+ 
+ from tvm.contrib.pickle_memoize import memoize
+ from topi.util import get_const_tuple
+-from topi.vision import ssd, non_max_suppression, get_valid_counts
++from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
+ 
+ 
+ def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):

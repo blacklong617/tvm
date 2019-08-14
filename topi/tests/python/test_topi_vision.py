@@ -24,7 +24,7 @@ import topi.testing
 
 from tvm.contrib.pickle_memoize import memoize
 from topi.util import get_const_tuple
-from topi.vision import ssd, non_max_suppression, get_valid_counts
+from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
 
 
 def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):
@@ -147,14 +147,14 @@ def verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indic
                                           return_indices=False)
                 indices_out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
                                                   coord_start=coord_start, score_index=score_index, id_index=id_index)
-            else:
-                out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
-                                                    coord_start=coord_start, score_index=score_index, id_index=id_index,
-                                                    return_indices=False)
-                indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
-                                                            coord_start=coord_start, score_index=score_index, id_index=id_index)
-            s = topi.generic.schedule_nms(out)
-            indices_s = topi.generic.schedule_nms(indices_out)
+            # else:
+            #     out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+            #                                         coord_start=coord_start, score_index=score_index, id_index=id_index,
+            #                                         return_indices=False)
+            #     indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+            #                                                 coord_start=coord_start, score_index=score_index, id_index=id_index)
+            s = topi.generic.schedule_onnxnms(out)
+            indices_s = topi.generic.schedule_onnxnms(indices_out)
 
         tvm_data = tvm.nd.array(np_data, ctx)
         tvm_valid_count = tvm.nd.array(np_valid_count, ctx)
@@ -195,6 +195,26 @@ def test_non_max_suppression():
     verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
 
 def test_onnx_non_max_suppression():
+    #  boxes:[1,6,4]
+    boxes = np.array([[
+    [0.0, 0.0, 1.0, 1.0],
+    [0.0, 0.1, 1.0, 1.1],
+    [0.0, -0.1, 1.0, 0.9],
+    [0.0, 10.0, 1.0, 11.0],
+    [0.0, 10.1, 1.0, 11.1],
+    [0.0, 100.0, 1.0, 101.0]
+    ]]).astype(np.float32)
+
+    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+    iou_threshold = np.array([0.5]).astype(np.float32)
+    score_threshold = np.array([0.0]).astype(np.float32)
+    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+
+    verify_onnx_non_max_suppression(boxes,scores,max_output_boxes_per_class,iou_threshold,score_threshold,selected_indices)
+
+    '''
     np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
                          [0, 0.4, 4, 21, 19, 40], [2, 0.9, 35, 61, 52, 79],
                          [1, 0.5, 100, 60, 70, 110]]]).astype("float32")
@@ -205,6 +225,7 @@ def test_onnx_non_max_suppression():
     np_indices_result = np.array([[3, 0, -1, -1, -1]])
 
     verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, True, 2, 2, 1, 0)
+    '''
 
     # np_data = np.array([[[0.8, 1, 20, 25, 45], [0.7, 30, 60, 50, 80],
     #                      [0.4, 4, 21, 19, 40], [0.9, 35, 61, 52, 79],

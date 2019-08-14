@@ -850,6 +850,18 @@ class ConstantFill(OnnxOpConverter):
             shape = shape + attr.pop('extra_shape')
         return _op.full(inputs[0], shape)
 
+# add by lizhijian
+class NMS(OnnxOpConverter):
+    @classmethod
+    def _impl_v10(cls, inputs, attr, params):
+        new_attrs={}
+        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
+        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
+        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
+        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
+        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
+
+        
 # compatible operators that do NOT require any conversion.
 _identity_list = []
 
@@ -964,7 +976,11 @@ def _get_convert_map(opset):
         'Unsqueeze': Unsqueeze.get_converter(opset),
         'Pad': Pad.get_converter(opset),
         'Shape': Shape.get_converter(opset),
+
+        # def/vision
+        'NonMaxSuppression': NMS.get_converter(opset),
     }
+
 
 
 class GraphProto(object):

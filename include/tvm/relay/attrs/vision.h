@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
   }
 };
 
+//add by lizhijian
+/*! \brief Attributes used in nms onnx operator */
+struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
+	int center_point_box;
+  int max_output_boxes_per_class;
+  double iou_threshold;
+  double score_threshold;
+
+	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
+		TVM_ATTR_FIELD(center_point_box).set_default(0)
+		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
+    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
+    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
+    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
+    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
+    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
+    .describe("Float representing the threshold for deciding when to remove boxes based on score");
+	}
+};
+
 /*! \brief Attributes used in non_maximum_suppression operator */
 struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
   int max_output_size;

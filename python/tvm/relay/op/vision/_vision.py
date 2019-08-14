@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
 
 
 reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
+
+# add by lizhijian
+# onnx nms
+@reg.register_schedule("vision.onnx_nms")
+def schedule_onnx_nms(_, outs, target):
+    """Schedule definition of onnx nms"""
+    with target:
+        return topi.generic.schedule_onnxnms(outs)
+
+
+@reg.register_compute("vision.onnx_nms")
+def compute_nms(attrs, inputs, _, target):
+    """Compute definition of onnx nms"""
+    center_point_box = get_const_int(attrs.center_point_box)
+    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
+    iou_threshold = get_const_float(attrs.iou_threshold)
+    score_threshold = get_const_float(attrs.score_threshold)
+    return [
+        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+    ]
+
+
+reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)

@@ -86,6 +86,25 @@ def schedule_nms(outs):
     """
     return _default_schedule(outs, False)
 
+# add by lizhijian
+@tvm.target.generic_func
+def schedule_onnxnms(outs):
+  """Schedule for onnx nms
+
+  Parameters
+  ----------
+  outs: Array of Tensor
+      The computation graph description of nms
+      in the format of an array of tensors.
+
+    Returns
+    -------
+    s: Schedule
+      The computation schedule for the op.
+  """
+  print("schedule_onnxnms")
+  return _default_schedule(outs,False)
+
 @tvm.target.generic_func
 def schedule_multibox_prior(outs):
     """Schedule for multibox_prior

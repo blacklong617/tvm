@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
     """Attributes for vision.non_maximum_suppression"""
 
 
+# add by lizhijian
+@register_relay_attr_node
+class OnnxNMSAttrs(Attrs):
+    """Attributes for vision.onnx_nms"""
+
+
 @register_relay_attr_node
 class ROIAlignAttrs(Attrs):
     """Attributes for vision.roi_align"""

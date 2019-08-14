@@ -145,5 +145,57 @@ Set id_index to be -1 to ignore class_id axis.
 .set_support_level(5)
 .add_type_rel("NMS", NMSRel);
 
+//add by lizhijian
+TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
+
+bool OnnxNMSRel(const Array<Type>& types,
+					int num_inputs,
+					const Attrs& attrs,
+					const TypeReporter& reporter){
+  std::cout<<"OnnxNMSReal"<<std::endl;
+	CHECK_EQ(types.size(), 3);
+	const auto* boxes = types[0].as<TensorTypeNode>();
+	const auto* scores = types[1].as<TensorTypeNode>();
+
+	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
+  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
+
+	const auto& boxesshape = boxes->shape;
+	const auto& scoresshape = scores->shape;
+
+	// assign output type
+  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
+	reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
+	return true;
+};
+
+Expr MakeOnnxNMS(Expr boxes,
+					Expr scores,
+          int center_point_box,
+					int max_output_boxes_per_class,
+					double iou_threshold,
+					double score_threshold){
+  std::cout<<"MakeOnnxNMS"<<std::endl;
+	auto attrs = make_node<OnnxNMSAttrs>();
+	attrs->center_point_box = center_point_box;
+  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
+  attrs->iou_threshold = iou_threshold;
+  attrs->score_threshold = score_threshold;
+	static const Op& op = Op::Get("vision.onnx_nms");
+	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
+.set_body_typed(MakeOnnxNMS);
+
+RELAY_REGISTER_OP("vision.onnx_nms")
+.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
+.set_num_inputs(2)
+.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
+.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
+.set_support_level(5)
+.add_type_rel("ONMS", OnnxNMSRel);
+
+
 }  // namespace relay
 }  // namespace tvm

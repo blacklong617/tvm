@@ -112,3 +112,11 @@ def non_max_suppression(data,
                                      iou_threshold, force_suppress, top_k,
                                      coord_start, score_index, id_index,
                                      return_indices, invalid_to_bottom)
+
+def onnx_nms(boxes, 
+            scores, 
+            center_point_box=0, 
+            max_output_boxes_per_class=-1, 
+            iou_threshold=0.5, 
+            score_threshold=0.0):
+    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)

@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
     target_module_name : str
        The target module name if different from namespace
     """
+    print(f'_init_api name is {target_module_name}')
     target_module_name = (
         target_module_name if target_module_name else namespace)
     if namespace.startswith("tvm."):
