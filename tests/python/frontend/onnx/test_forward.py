@@ -47,6 +47,7 @@ def get_tvm_output(graph_def, input_data, target, ctx, output_shape=None, output
 
     mod, params = relay.frontend.from_onnx(graph_def, shape_dict)
     with relay.build_config(opt_level=1):
+        print("params:{}".format(params))
         graph, lib, params = relay.build(mod,
                                          target,
                                          params=params)
@@ -1116,15 +1117,203 @@ def test_inception():
 # def test_shufflenetv2():
 #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
 
+# add by lizhijian
+def test_forward_nms():
+    node = onnx.helper.make_node(
+    'NonMaxSuppression',
+    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
+    outputs=['selected_indices'],
+    center_point_box=0,
+    )
+
+# 1 export_nonmaxsuppression_suppress_by_IOU():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.1, 1.0, 1.1],
+    #     [0.0, -0.1, 1.0, 0.9],
+    #     [0.0, 10.0, 1.0, 11.0],
+    #     [0.0, 10.1, 1.0, 11.1],
+    #     [0.0, 100.0, 1.0, 101.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+
+# @staticmethod
+# 2 export_nonmaxsuppression_suppress_by_IOU_and_scores():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.1, 1.0, 1.1],
+    #     [0.0, -0.1, 1.0, 0.9],
+    #     [0.0, 10.0, 1.0, 11.0],
+    #     [0.0, 10.1, 1.0, 11.1],
+    #     [0.0, 100.0, 1.0, 101.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.4]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+
+# @staticmethod
+# 3 export_nonmaxsuppression_flipped_coordinates():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [1.0, 1.0, 0.0, 0.0],
+    #     [0.0, 0.1, 1.0, 1.1],
+    #     [0.0, 0.9, 1.0, -0.1],
+    #     [0.0, 10.0, 1.0, 11.0],
+    #     [1.0, 10.1, 0.0, 11.1],
+    #     [1.0, 101.0, 0.0, 100.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+
+# @staticmethod
+# 4 export_nonmaxsuppression_limit_output_size():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.1, 1.0, 1.1],
+    #     [0.0, -0.1, 1.0, 0.9],
+    #     [0.0, 10.0, 1.0, 11.0],
+    #     [0.0, 10.1, 1.0, 11.1],
+    #     [0.0, 100.0, 1.0, 101.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+
+# @staticmethod
+# 5 export_nonmaxsuppression_single_box():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+
+# @staticmethod
+# 6 export_nonmaxsuppression_identical_boxes():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.0, 1.0, 1.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+
+# @staticmethod 
+# 7 export_nonmaxsuppression_center_point_box_format():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.5, 0.5, 1.0, 1.0],
+    #     [0.5, 0.6, 1.0, 1.0],
+    #     [0.5, 0.4, 1.0, 1.0],
+    #     [0.5, 10.5, 1.0, 1.0],
+    #     [0.5, 10.6, 1.0, 1.0],
+    #     [0.5, 100.5, 1.0, 1.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+
+# @staticmethod
+# 8 export_nonmaxsuppression_two_classes():  # type: () -> None
+# pass
+    # boxes = np.array([[
+    #     [0.0, 0.0, 1.0, 1.0],
+    #     [0.0, 0.1, 1.0, 1.1],
+    #     [0.0, -0.1, 1.0, 0.9],
+    #     [0.0, 10.0, 1.0, 11.0],
+    #     [0.0, 10.1, 1.0, 11.1],
+    #     [0.0, 100.0, 1.0, 101.0]
+    # ]]).astype(np.float32)
+    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+    #                     [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+    # iou_threshold = np.array([0.5]).astype(np.float32)
+    # score_threshold = np.array([0.0]).astype(np.float32)
+    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+
+# @staticmethod
+# 9 export_nonmaxsuppression_two_batches():  # type: () -> None
+# pass
+    boxes = np.array([[[0.0, 0.0, 1.0, 1.0],
+                        [0.0, 0.1, 1.0, 1.1],
+                        [0.0, -0.1, 1.0, 0.9],
+                        [0.0, 10.0, 1.0, 11.0],
+                        [0.0, 10.1, 1.0, 11.1],
+                        [0.0, 100.0, 1.0, 101.0]],
+                        [[0.0, 0.0, 1.0, 1.0],
+                        [0.0, 0.1, 1.0, 1.1],
+                        [0.0, -0.1, 1.0, 0.9],
+                        [0.0, 10.0, 1.0, 11.0],
+                        [0.0, 10.1, 1.0, 11.1],
+                        [0.0, 100.0, 1.0, 101.0]]]).astype(np.float32)
+    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]],
+                        [[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+    iou_threshold = np.array([0.5]).astype(np.float32)
+    score_threshold = np.array([0.0]).astype(np.float32)
+    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [1, 0, 3], [1, 0, 0]]).astype(np.int64)
+
+
+    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
+    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
+    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
+
+    graph = onnx.helper.make_graph([node],'NMS_test',
+                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
+                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
+                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
+                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
+                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
+                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
+                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
+    model = helper.make_model(graph, producer_name='NMS_test')
+    onnx.save_model(model,'nms.onnx')
+    for target, ctx in ctx_list():
+        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
+        print(tvm_out)
+
 
 if __name__ == '__main__':
+    test_forward_nms()
+    '''
     test_flatten()
     test_reshape()
     test_shape()
     test_power()
     test_squeeze()
     test_unsqueeze()
-    test_slice()
+    #test_slice()
     test_floor()
     test_ceil()
     test_clip()
@@ -1159,3 +1348,4 @@ if __name__ == '__main__':
     test_resnet()
     test_inception()
     test_densenet()
+    '''
