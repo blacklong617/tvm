@@ -131,7 +131,7 @@ class BinaryOpNode : public ExprNode {
   static Expr make(Expr a, Expr b) {
     CHECK(a.defined()) << "ValueError: a is undefined\n";
     CHECK(b.defined()) << "ValueError: b is undefined\n";
-    CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
+    // CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
     NodePtr<T> node = make_node<T>();
     node->type = a.type();
     node->a = std::move(a);

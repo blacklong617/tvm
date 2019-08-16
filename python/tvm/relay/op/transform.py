@@ -589,7 +589,7 @@ def strided_slice(data, begin, end, strides=None):
     ret : relay.Expr
         The computed result.
     """
-    strides = strides or []
+    # strides = strides or []
     return _make.strided_slice(data, list(begin), list(end), list(strides))
 
 

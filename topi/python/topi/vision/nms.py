@@ -189,13 +189,14 @@ def hybrid_onnx_nms(boxes, scores, sort_score, center_point_box_const,max_output
                 output[box_id,2] = -1
                 box_id = box_id + 1
     
+    
     #
     #  TopK、IOU
     #
     #  iou的过滤之前，先准备需要进行iou计算的boxes，该boxes包含每个batch中每个类别的每个box按分数由大到小排列
     #  boxes[batch_id,class_id,box_id,4]
     #  
-    for i in range(num_batches):
+    for i in parallel(num_batches):
         mkeep = num_box
         # for j in range(num_class):
 
@@ -555,9 +556,6 @@ def onnx_nms(boxes, scores,
     iou_threshold_const = tvm.const(iou_threshold, "float32")
     score_threshold_const = tvm.const(score_threshold, "float32")
     sort_score = argsort(scores,axis=2, is_ascend=False,dtype="int32")
-    print('sort_score:{}'.format(sort_score))
-    print('boxes:{}'.format(boxes))
-    print('scores:{}'.format(scores))
     return hybrid_onnx_nms(boxes, scores,sort_score, 
                             center_point_box_const,
                             max_output_boxes_per_class_const,

@@ -290,32 +290,44 @@ def test_gather():
     verify_gather((3,3,3), [[[1,0]]], -1, 'int32')
     verify_gather((4,3,5,6), [[2,1,0,0]], 0, 'float32')
 
-def _test_slice_iteration(indata, outdata, starts, ends, axes=None):
-    if axes:
-        y = helper.make_node("Slice", ['in'], ['out'], axes=axes, starts=starts, ends=ends)
-    else:
-        y = helper.make_node("Slice", ['in'], ['out'], starts=starts, ends=ends)
+def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
 
+    y = helper.make_node("Slice", inputs = ['indata','starts','ends','axes','steps'],outputs = ['outdata'])
+
+    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(2,), vals=starts)
+    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(2,), vals=ends)
+    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(2,), vals=axes)
+    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(2,), vals=steps)
     graph = helper.make_graph([y],
                               'slice_test',
-                              inputs = [helper.make_tensor_value_info("in",
-                                            TensorProto.FLOAT, list(indata.shape))],
-                              outputs = [helper.make_tensor_value_info("out",
-                                            TensorProto.FLOAT, list(outdata.shape))])
+                              inputs = [helper.make_tensor_value_info("indata",TensorProto.FLOAT, list(indata.shape)),
+                              helper.make_tensor_value_info("starts",TensorProto.FLOAT, list(starts.shape)),
+                              helper.make_tensor_value_info("ends",TensorProto.FLOAT, list(ends.shape)),
+                              helper.make_tensor_value_info("axes",TensorProto.FLOAT, list(axes.shape)),
+                              helper.make_tensor_value_info("steps",TensorProto.FLOAT, list(steps.shape))],
+                              outputs = [helper.make_tensor_value_info("outdata",
+                                            TensorProto.FLOAT, list(outdata.shape))],
+                              initializer=[starts_tensor, ends_tensor, axes_tensor,steps_tensor],)
 
     model = helper.make_model(graph, producer_name='slice_test')
-
+    onnx.save_model(model,'slice.onnx')
     for target, ctx in ctx_list():
-        tvm_out = get_tvm_output(model, indata, target, ctx, outdata.shape, 'float32')
+        tvm_out = get_tvm_output(model, [indata], target, ctx, outdata.shape, 'float32')
+        print("tvm_out:{}".format(tvm_out))
 
     tvm.testing.assert_allclose(outdata, tvm_out)
 
+
 def test_slice():
     x = np.random.randn(20, 10, 5).astype(np.float32)
-    _test_slice_iteration(x, x[0:3, 0:10], (0, 0), (3, 10), (0, 1))
-    _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4))
-    _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1))
-    _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1))
+    starts = np.array([0, 0]).astype(np.int64)
+    ends = np.array([3, 10]).astype(np.int64)
+    axes = np.array([0, 1]).astype(np.int64)
+    steps = np.array([1,1]).astype(np.int64)
+    _test_slice_iteration(x, x[0:3, 0:10], starts,ends, axes,steps)
+    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4))
+    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1))
+    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1))
 
 def _test_onnx_op_elementwise(inshape, outfunc, npargs, dtype, opname, kwargs):
     indata = np.random.uniform(-1, 1, size=inshape).astype(dtype)
@@ -1306,6 +1318,7 @@ def test_forward_nms():
 
 if __name__ == '__main__':
     test_forward_nms()
+    # test_slice()
     '''
     test_flatten()
     test_reshape()

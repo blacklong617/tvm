@@ -310,6 +310,7 @@ Expr Buffer::vload(Array<Expr> begin, Type dtype) const {
 Stmt Buffer::vstore(Array<Expr> begin, Expr value) const {
   // specially handle bool, stored as Int(8)
   const BufferNode* n = operator->();
+  // << "value"<<value
   Type dtype = value.type();
   CHECK(dtype.element_of() == n->dtype.element_of() &&
         dtype.lanes() % n->dtype.lanes() == 0)

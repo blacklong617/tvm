@@ -87,10 +87,12 @@ void GraphRuntime::Init(const std::string& graph_json,
 int GraphRuntime::GetInputIndex(const std::string& name) {
   for (size_t i = 0; i< input_nodes_.size(); ++i) {
     uint32_t nid = input_nodes_[i];
+    // LOG(WARNING) << "input_name:  find \"" << name << "\" among input";
     if (nodes_[nid].name == name) {
       return static_cast<int>(i);
     }
   }
+
   LOG(WARNING) << "Warning: cannot find \"" << name << "\" among input";
   return -1;
 }

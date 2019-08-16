@@ -113,7 +113,13 @@ class Elemwise(OnnxOpConverter):
         assert len(inputs) == 2, "Math op take 2 inputs, {} given".format(
             len(inputs))
         op_name = cls.name
+        B =0 
         conv_ops = ["conv2d", "conv2d_transpose"]
+        if op_name == 'multiply':
+            print('op_name ={},input[1].dtype:{}'.format(op_name,params[inputs[1].name_hint].asnumpy().dtype))
+            # if params[inputs[1].name_hint].asnumpy().dtype == 'int64':
+            #     B= params[inputs[1].name_hint].asnumpy().astype('int32')
+            #     print("B.dtype={}".format(B.dtype))
         if attr.get('broadcast', 0) and any(x in str(inputs[0]) for x in conv_ops):
             # TODO(zhreshold): remove hard coded infershape
             axis = int(attr.get('axis', 0))
@@ -663,6 +669,73 @@ class Slice(OnnxOpConverter):
                        transforms={'starts': 'begin',
                                    'ends': 'end'},
                        ignores=['axes'])(inputs, attr)
+    @classmethod
+    def _impl_v10(cls, inputs, attr, params):
+        # attr['starts'] = params[inputs[1].name_hint].asnumpy()[0]
+        # attr['ends'] = params[inputs[2].name_hint].asnumpy()[0]
+        # attr['axes'] = params[inputs[3].name_hint].asnumpy()[0]
+        # attr['strides'] = params[inputs[4].name_hint].asnumpy()[0]
+        # #print("slice axes type {} ".format((attr['axes'])))
+        # #print("slice starts type {} ".format((attr['starts'])))
+        # print("slice input {} ".format(inputs[1:]))
+        # '''
+        # if (max(attr['axes'])+1) != len(attr['axes']):
+        #     new_axes = []
+        #     new_starts = []
+        #     new_ends = []
+        #     pop_index = 0
+        #     for i in range(max( attr['axes'])+1):
+        #         if i in attr['axes']:
+        #             new_axes.append(i)
+        #             new_starts.append(attr['starts'][pop_index])
+        #             new_ends.append(attr['ends'][pop_index])
+        #             pop_index += 1
+        #         else:
+        #             new_axes.append(i)
+        #             new_starts.append(0)
+        #             new_ends.append(np.iinfo(np.int32).max)
+        #     attr['axes'] = new_axes
+        #     attr['starts'] = new_starts
+        #     attr['ends'] = new_ends
+        # '''
+
+        # return AttrCvt('strided_slice',
+        #                transforms={'starts': 'begin',
+        #                            'ends': 'end'},
+        #                ignores=['axes'])([inputs[0]], attr)
+
+        #prepare attr
+        attr['starts'] = params[inputs[1].name_hint].asnumpy()
+        attr['ends'] = params[inputs[2].name_hint].asnumpy()
+        attr['axes'] = params[inputs[3].name_hint].asnumpy()
+        attr['strides'] = params[inputs[4].name_hint].asnumpy()
+        try:
+            # Update the starts and ends according to axes if required.
+            if (max(attr['axes']) + 1) != len(attr['axes']):
+                new_axes = []
+                new_starts = []
+                new_ends = []
+                pop_index = 0
+                for i in range(max(attr['axes']) + 1):
+                    if i in attr['axes']:
+                        new_axes.append(i)
+                        new_starts.append(attr['starts'][pop_index])
+                        new_ends.append(attr['ends'][pop_index])
+                        pop_index += 1
+                    else:
+                        new_axes.append(i)
+                        new_starts.append(0)
+                        new_ends.append(np.iinfo(np.int32).max)
+                attr['axes'] = new_axes
+                attr['starts'] = new_starts
+                attr['ends'] = new_ends
+        except KeyError:
+            pass
+
+        return AttrCvt('strided_slice',
+                    transforms={'starts': 'begin',
+                                'ends': 'end',},
+                    ignores=['axes'])([inputs[0]], attr)
 
 class Gather(OnnxOpConverter):
     """ Operator converter for Gather.
@@ -671,8 +744,8 @@ class Gather(OnnxOpConverter):
     def _impl_v1(cls, inputs, attr, params):
         axis = attr.get('axis', 0)
         return AttrCvt('take',
-                       extras={'axis':axis})(inputs, {})
-        #return _op.take(inputs[0], inputs[1], axis)
+                       extras={'axis':axis})(inputs, attr)
+        # return _op.take(inputs[0], inputs[1], axis)
 
 
 class Greater(OnnxOpConverter):
@@ -861,7 +934,19 @@ class NMS(OnnxOpConverter):
         new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
         return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
 
-        
+
+class TopK(OnnxOpConverter):
+    @classmethod
+    def _impl_v10(cls, inputs, attrs, params):
+        assert len(inputs) == 2
+        new_attrs = {}
+        new_attrs["axis"] = attrs.get("axis", -1)
+        new_attrs["ret_type"] = "both"
+        new_attrs["is_ascend"] = False
+        new_attrs["dtype"] = "int64"
+        new_attrs["k"] = params[inputs[1].name_hint].asnumpy()[0]
+        return _op.topk(inputs[0], **new_attrs)
+
 # compatible operators that do NOT require any conversion.
 _identity_list = []
 
@@ -976,7 +1061,7 @@ def _get_convert_map(opset):
         'Unsqueeze': Unsqueeze.get_converter(opset),
         'Pad': Pad.get_converter(opset),
         'Shape': Shape.get_converter(opset),
-
+        'TopK':TopK.get_converter(opset),
         # def/vision
         'NonMaxSuppression': NMS.get_converter(opset),
     }
@@ -1043,6 +1128,9 @@ class GraphProto(object):
             #  and the name is 'i.name'
             i_name = self._parse_value_proto(i)
             d_type = self._parse_dtype(i, 'float32')
+            # if i.dtype == 'int64':
+            #     i = i.astype('int32')
+            
             if i_name in self._params:
                 # i is a param instead of input
                 self._num_param += 1
@@ -1079,6 +1167,11 @@ class GraphProto(object):
             op_name = node.op_type
             attr = self._parse_attr(node.attribute)
             inputs = [self._nodes[self._renames.get(i, i)] for i in node.input]
+
+            # array = self._parse_array(t_proto)
+            # if inputs.dtype == 'int64':
+            #     array = _nd.array(array.asnumpy().astype('int32'))
+
             if op_name == "Constant":
                 t_proto = self._parse_attr(node.attribute)["value"]
                 self._num_param += 1
@@ -1091,6 +1184,19 @@ class GraphProto(object):
                     node.output[0],
                     shape=list(t_proto.dims),
                     dtype=array.dtype)
+            # elif op_name == 'multiply' or op_name == 'Mul':
+            #     print("op multiply find,input:{}".format(node.input))
+                # t_proto = self._parse_attr(node.attribute)["value"]
+                # self._num_param += 1
+                # # We should convert scalar integers to int32, to normalize.
+                # array = self._parse_array(t_proto)
+                # if len(array.shape) == 0 and array.dtype == 'int64':
+                #     array = _nd.array(array.asnumpy().astype('int32'))
+                # self._params[node.output[0]] = array
+                # self._nodes[node.output[0]] = new_var(
+                #     node.output[0],
+                #     shape=list(t_proto.dims),
+                #     dtype=array.dtype)
             else:
                 if op_name == "ConstantFill":
                     fill_value = attr.get('value', 0.0)
@@ -1118,8 +1224,10 @@ class GraphProto(object):
                 else:
                     for k, i in zip(list(node_output), range(len(node_output))):
                         self._nodes[k] = op[i]
+            
 
         # now return the outputs
+        # print("params:{}".format(self._params))
         outputs = [self._nodes[self._parse_value_proto(i)] for i in graph.output]
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
         func = _expr.Function(analysis.free_vars(outputs), outputs)
@@ -1147,8 +1255,14 @@ class GraphProto(object):
             from onnx.numpy_helper import to_array
         except ImportError as e:
             raise ImportError(
-                "Unable to import onnx which is required {}".format(e))
+                "Unable to import onnx which is required {}".format(e)) 
         np_array = to_array(tensor_proto).reshape(tuple(tensor_proto.dims))
+
+        # print("np_array:{}".format(np_array))
+        # if np_array.dtype == 'int64':
+        #     print('np_array == int32')
+        #     np_array = np_array.astype('int32')
+
         return _nd.array(np_array)
 
     def _parse_attr(self, attr_proto):
