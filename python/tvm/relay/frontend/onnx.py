@@ -601,7 +601,17 @@ class Cast(OnnxOpConverter):
             raise ImportError(
                 "Unable to import onnx.mapping which is required {}".format(e))
         return AttrCvt(op_name='cast', transforms={'to': 'dtype'})(inputs, attr)
-
+    @classmethod
+    def _impl_v9(cls, inputs, attr, params):
+        try:
+            if attr['to'] == 7:
+                attr['to'] = 6
+            from onnx.mapping import TENSOR_TYPE_TO_NP_TYPE
+            attr['to'] = str(TENSOR_TYPE_TO_NP_TYPE[attr['to']])
+        except ImportError as e:
+            raise ImportError(
+                "Unable to import onnx.mapping which is required {}".format(e))
+        return AttrCvt(op_name='cast', transforms={'to': 'dtype'})(inputs, attr)
 
 class Unsqueeze(OnnxOpConverter):
     """ Operator converter for Unsqueeze.

@@ -1,0 +1,429 @@
+diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
+index 3cfdbb53..f2609c8f 100644
+--- a/python/tvm/relay/frontend/onnx.py
++++ b/python/tvm/relay/frontend/onnx.py
+@@ -113,10 +113,10 @@ class Elemwise(OnnxOpConverter):
+         assert len(inputs) == 2, "Math op take 2 inputs, {} given".format(
+             len(inputs))
+         op_name = cls.name
+-        B =0 
+         conv_ops = ["conv2d", "conv2d_transpose"]
+         if op_name == 'multiply':
+             print('op_name ={},input[1].dtype:{}'.format(op_name,params[inputs[1].name_hint].asnumpy().dtype))
++            # print('op_name ={},input[0].dtype:{}'.format(op_name, params[inputs[0].name_hint].asnumpy().dtype))
+             # if params[inputs[1].name_hint].asnumpy().dtype == 'int64':
+             #     B= params[inputs[1].name_hint].asnumpy().astype('int32')
+             #     print("B.dtype={}".format(B.dtype))
+@@ -671,44 +671,15 @@ class Slice(OnnxOpConverter):
+                        ignores=['axes'])(inputs, attr)
+     @classmethod
+     def _impl_v10(cls, inputs, attr, params):
+-        # attr['starts'] = params[inputs[1].name_hint].asnumpy()[0]
+-        # attr['ends'] = params[inputs[2].name_hint].asnumpy()[0]
+-        # attr['axes'] = params[inputs[3].name_hint].asnumpy()[0]
+-        # attr['strides'] = params[inputs[4].name_hint].asnumpy()[0]
+-        # #print("slice axes type {} ".format((attr['axes'])))
+-        # #print("slice starts type {} ".format((attr['starts'])))
+-        # print("slice input {} ".format(inputs[1:]))
+-        # '''
+-        # if (max(attr['axes'])+1) != len(attr['axes']):
+-        #     new_axes = []
+-        #     new_starts = []
+-        #     new_ends = []
+-        #     pop_index = 0
+-        #     for i in range(max( attr['axes'])+1):
+-        #         if i in attr['axes']:
+-        #             new_axes.append(i)
+-        #             new_starts.append(attr['starts'][pop_index])
+-        #             new_ends.append(attr['ends'][pop_index])
+-        #             pop_index += 1
+-        #         else:
+-        #             new_axes.append(i)
+-        #             new_starts.append(0)
+-        #             new_ends.append(np.iinfo(np.int32).max)
+-        #     attr['axes'] = new_axes
+-        #     attr['starts'] = new_starts
+-        #     attr['ends'] = new_ends
+-        # '''
+-
+-        # return AttrCvt('strided_slice',
+-        #                transforms={'starts': 'begin',
+-        #                            'ends': 'end'},
+-        #                ignores=['axes'])([inputs[0]], attr)
+-
+         #prepare attr
+         attr['starts'] = params[inputs[1].name_hint].asnumpy()
+-        attr['ends'] = params[inputs[2].name_hint].asnumpy()
++        attr['ends'] = params[inputs[2].name_hint].asnumpy() ## 取出的ends原本为int64最大值，这里取到-1
+         attr['axes'] = params[inputs[3].name_hint].asnumpy()
+         attr['strides'] = params[inputs[4].name_hint].asnumpy()
++        # print("params:{}".format(params))
++        print('ends0:{}'.format(attr['ends']))
++        if attr['ends']==-1:## 换成int32最大值
++            attr['ends'] = [np.iinfo(np.int32).max]
+         try:
+             # Update the starts and ends according to axes if required.
+             if (max(attr['axes']) + 1) != len(attr['axes']):
+@@ -731,7 +702,8 @@ class Slice(OnnxOpConverter):
+                 attr['ends'] = new_ends
+         except KeyError:
+             pass
+-
++        print('axes:{}'.format(attr['axes']))
++        print('ends:{}'.format(attr['ends']))
+         return AttrCvt('strided_slice',
+                     transforms={'starts': 'begin',
+                                 'ends': 'end',},
+@@ -1120,16 +1092,24 @@ class GraphProto(object):
+             if not init_tensor.name.strip():
+                 raise ValueError("Tensor's name is required.")
+             self._params[init_tensor.name] = self._parse_array(init_tensor)
+-            self._nodes[init_tensor.name] = new_var(init_tensor.name,
+-                                                    shape=self._params[init_tensor.name].shape,
+-                                                    dtype=self._params[init_tensor.name].dtype)
++            if  self._params[init_tensor.name].dtype == 'int64':
++                print("tensor name:{},change int64 to int32.".format(init_tensor.name))
++                self._nodes[init_tensor.name] = new_var(init_tensor.name,
++                                                        shape=self._params[init_tensor.name].shape,
++                                                        dtype='int32')
++            else:
++                self._nodes[init_tensor.name] = new_var(init_tensor.name,
++                                                        shape=self._params[init_tensor.name].shape,
++                                                        dtype=self._params[init_tensor.name].dtype)
+         for i in graph.input:
+             # from onnx v0.2, GraphProto.input has type ValueInfoProto,
+             #  and the name is 'i.name'
+             i_name = self._parse_value_proto(i)
+             d_type = self._parse_dtype(i, 'float32')
+-            # if i.dtype == 'int64':
+-            #     i = i.astype('int32')
++            # if d_type == 'int64':
++            #     print("i_name={},d_type ={}".format(i.name,d_type))
++                # d_type = 'int32'
++            
+             
+             if i_name in self._params:
+                 # i is a param instead of input
+@@ -1149,6 +1129,11 @@ class GraphProto(object):
+                 else:
+                     dtype = d_type
+                 self._nodes[i_name] = new_var(i_name, shape=tshape, dtype=dtype)
++            
++            # check dtype
++            # d_type = self._parse_dtype(i, 'float32')
++            # if d_type == 'int64':
++            #     print("end i_name={},d_type ={}".format(i.name,d_type))
+         # get list of unsupported ops
+         convert_map = _get_convert_map(opset)
+         unsupported_ops = set()
+@@ -1165,6 +1150,7 @@ class GraphProto(object):
+         # construct nodes, nodes are stored as directed acyclic graph
+         for node in graph.node:
+             op_name = node.op_type
++            # print('op_name:{}'.format(op_name))
+             attr = self._parse_attr(node.attribute)
+             inputs = [self._nodes[self._renames.get(i, i)] for i in node.input]
+ 
+@@ -1172,6 +1158,9 @@ class GraphProto(object):
+             # if inputs.dtype == 'int64':
+             #     array = _nd.array(array.asnumpy().astype('int32'))
+ 
++            # if op_name == "Unsqueeze":
++            #     print("unsqueeze")
++
+             if op_name == "Constant":
+                 t_proto = self._parse_attr(node.attribute)["value"]
+                 self._num_param += 1
+@@ -1211,6 +1200,7 @@ class GraphProto(object):
+                 attr['tvm_custom']['name'] = i_name
+ 
+                 op = self._convert_operator(op_name, inputs, attr, opset)
++                # print("inputs:{}".format(op_name))
+                 node_output = self._fix_outputs(op_name, node.output)
+                 if not isinstance(op, _expr.TupleWrapper):
+                     outputs_num = 1
+@@ -1230,8 +1220,11 @@ class GraphProto(object):
+         # print("params:{}".format(self._params))
+         outputs = [self._nodes[self._parse_value_proto(i)] for i in graph.output]
+         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
++        # print("outputs:{}".format(outputs))
+         func = _expr.Function(analysis.free_vars(outputs), outputs)
++        
+         return _module.Module.from_expr(func), self._params
++        # return func, self._params
+ 
+     def _parse_value_proto(self, value_proto):
+         """Parse ValueProto or raw str."""
+@@ -1259,9 +1252,9 @@ class GraphProto(object):
+         np_array = to_array(tensor_proto).reshape(tuple(tensor_proto.dims))
+ 
+         # print("np_array:{}".format(np_array))
+-        # if np_array.dtype == 'int64':
+-        #     print('np_array == int32')
+-        #     np_array = np_array.astype('int32')
++        if np_array.dtype == 'int64':
++            print('change int64 to int32')
++            np_array = np_array.astype('int32')
+ 
+         return _nd.array(np_array)
+ 
+diff --git a/src/relay/op/algorithm/topk.cc b/src/relay/op/algorithm/topk.cc
+index c88e2c3e..b58242ad 100644
+--- a/src/relay/op/algorithm/topk.cc
++++ b/src/relay/op/algorithm/topk.cc
+@@ -35,6 +35,7 @@ bool TopKRel(const Array<Type>& types,
+              const Attrs& attrs,
+              const TypeReporter& reporter) {
+   // `types` contains: [data, result]
++  std::cout<<"TopKRel"<<std::endl;
+   const TopKAttrs* param = attrs.as<TopKAttrs>();
+   CHECK_EQ(types.size(), 2);
+   const auto* data = types[0].as<TensorTypeNode>();
+diff --git a/src/relay/op/tensor/transform.cc b/src/relay/op/tensor/transform.cc
+index 07315d5d..be871416 100644
+--- a/src/relay/op/tensor/transform.cc
++++ b/src/relay/op/tensor/transform.cc
+@@ -1744,6 +1744,7 @@ bool StridedSliceRel(const Array<Type>& types,
+                      int num_inputs,
+                      const Attrs& attrs,
+                      const TypeReporter& reporter) {
++  // std::cout<<"strided_slice"<<std::endl;
+   CHECK_EQ(types.size(), 2);
+   const auto* data = types[0].as<TensorTypeNode>();
+   if (data == nullptr) return false;
+diff --git a/src/relay/op/type_relations.cc b/src/relay/op/type_relations.cc
+index 4da8d438..489f7392 100644
+--- a/src/relay/op/type_relations.cc
++++ b/src/relay/op/type_relations.cc
+@@ -113,10 +113,12 @@ bool BroadcastRel(const Array<Type>& types,
+                   const Attrs& attrs,
+                   const TypeReporter& reporter) {
+   CHECK_EQ(types.size(), 3);
+-  std::cout << "In1:" << types[0] << ",In2:" << types[1]
+-                  << ",Out:" << types[2] << std::endl;
++  // std::cout << "In1:" << types[0] << ",In2:" << types[1]
++  //                 << ",Out:" << types[2] << std::endl;
+   if (auto t0 = ToTensorType(types[0])) {
+     if (auto t1 = ToTensorType(types[1])) {
++      // auto t2 = (int)t1;
++      // auto t3 = ToTensorType(t2);
+       CHECK_EQ(t0->dtype, t1->dtype);
+       reporter->Assign(types[2],
+         ConcreteBroadcast(t0, t1, t0->dtype));
+diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
+index 03588193..fd877f69 100644
+--- a/src/relay/op/vision/nms.cc
++++ b/src/relay/op/vision/nms.cc
+@@ -152,18 +152,36 @@ bool OnnxNMSRel(const Array<Type>& types,
+ 					int num_inputs,
+ 					const Attrs& attrs,
+ 					const TypeReporter& reporter){
+-  std::cout<<"OnnxNMSReal"<<std::endl;
++  // std::cout<<"OnnxNMSReal0"<<std::endl;
+ 	CHECK_EQ(types.size(), 3);
+ 	const auto* boxes = types[0].as<TensorTypeNode>();
+ 	const auto* scores = types[1].as<TensorTypeNode>();
++  if (boxes == nullptr){
++    std::cout<<"boxes is nullptr!!"<<std::endl;
++    return false;
++  }
++  CHECK_NE(boxes->shape.size(), 0) << "Input shape cannot be empty";
+ 
++  if (scores == nullptr) return false;
++  CHECK_NE(scores->shape.size(), 0) << "Input shape cannot be empty";
+ 	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
+   int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
+ 
+ 	const auto& boxesshape = boxes->shape;
++  // std::cout<<"OnnxNMSReal1"<<std::endl;
+ 	const auto& scoresshape = scores->shape;
++  // std::cout<<"OnnxNMSReal2"<<std::endl;
++  // CHECK_EQ(scoresshape.size(), 3);
++  
++  // std::cout<<"OnnxNMSReal2.5"<<std::endl;
++  // CHECK_EQ(boxesshape.size(), 3);
+ 
+ 	// assign output type
++  // std::cout<<"OnnxNMSReal2"<<std::endl;
++  std::cout<<"scoresshape[1]"<<scoresshape<<std::endl;
++  std::cout<<"boxesshape[0]"<<boxesshape<<std::endl;
++  
++  // std::cout<<"max_output_boxes_per_class"<<max_output_boxes_per_class<<std::endl;
+   std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
+ 	reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
+ 	return true;
+diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
+index f7f5bdf2..de7cdd5b 100644
+--- a/tests/python/frontend/onnx/test_forward.py
++++ b/tests/python/frontend/onnx/test_forward.py
+@@ -294,17 +294,18 @@ def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
+ 
+     y = helper.make_node("Slice", inputs = ['indata','starts','ends','axes','steps'],outputs = ['outdata'])
+ 
+-    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(2,), vals=starts)
+-    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(2,), vals=ends)
+-    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(2,), vals=axes)
+-    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(2,), vals=steps)
++    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(len(starts),), vals=starts)
++    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(len(ends),), vals=ends)
++    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(len(axes),), vals=axes)
++    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(len(steps),), vals=steps)
++    print('start tensor:{}'.format(starts_tensor))
+     graph = helper.make_graph([y],
+                               'slice_test',
+                               inputs = [helper.make_tensor_value_info("indata",TensorProto.FLOAT, list(indata.shape)),
+-                              helper.make_tensor_value_info("starts",TensorProto.FLOAT, list(starts.shape)),
+-                              helper.make_tensor_value_info("ends",TensorProto.FLOAT, list(ends.shape)),
+-                              helper.make_tensor_value_info("axes",TensorProto.FLOAT, list(axes.shape)),
+-                              helper.make_tensor_value_info("steps",TensorProto.FLOAT, list(steps.shape))],
++                              helper.make_tensor_value_info("starts",TensorProto.INT64, list(starts.shape)),
++                              helper.make_tensor_value_info("ends",TensorProto.INT64, list(ends.shape)),
++                              helper.make_tensor_value_info("axes",TensorProto.INT64, list(axes.shape)),
++                              helper.make_tensor_value_info("steps",TensorProto.INT64, list(steps.shape))],
+                               outputs = [helper.make_tensor_value_info("outdata",
+                                             TensorProto.FLOAT, list(outdata.shape))],
+                               initializer=[starts_tensor, ends_tensor, axes_tensor,steps_tensor],)
+@@ -313,21 +314,79 @@ def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
+     onnx.save_model(model,'slice.onnx')
+     for target, ctx in ctx_list():
+         tvm_out = get_tvm_output(model, [indata], target, ctx, outdata.shape, 'float32')
+-        print("tvm_out:{}".format(tvm_out))
++        print("tvm_out.shape:{}".format(tvm_out.shape))
+ 
+     tvm.testing.assert_allclose(outdata, tvm_out)
+ 
+ 
+ def test_slice():
+-    x = np.random.randn(20, 10, 5).astype(np.float32)
+-    starts = np.array([0, 0]).astype(np.int64)
+-    ends = np.array([3, 10]).astype(np.int64)
+-    axes = np.array([0, 1]).astype(np.int64)
+-    steps = np.array([1,1]).astype(np.int64)
+-    _test_slice_iteration(x, x[0:3, 0:10], starts,ends, axes,steps)
+-    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4))
+-    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1))
+-    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1))
++    ## slice pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0]).astype(np.int64)
++    # ends = np.array([3, 10]).astype(np.int64)
++    # axes = np.array([0, 1]).astype(np.int64)
++    # steps = np.array([1,1]).astype(np.int64)
++    # y = x[0:3,0:10]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_default_axes fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0, 3], dtype=np.int64)
++    # ends = np.array([20, 10, 4], dtype=np.int64)
++    # y = x[:, :, 3:4]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_default_steps fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0, 3], dtype=np.int64)
++    # ends = np.array([20, 10, 4], dtype=np.int64)
++    # axes = np.array([0, 1, 2], dtype=np.int64)
++    # steps = np.array([1,1,1],dtype = np.int64)
++    # y = x[:, :, 3:4]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++    
++    ## slice_end_out_of_bounds pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([1], dtype=np.int64)
++    # ends = np.array([1000], dtype=np.int64)
++    # axes = np.array([1], dtype=np.int64)
++    # steps = np.array([1], dtype=np.int64)
++    # y = x[:, 1:1000]
++    # _test_slice_iteration(x, y, starts, ends, axes, steps)
++
++    ## slice_start_out_of_bounds fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([1000], dtype=np.int64)
++    # ends = np.array([1000], dtype=np.int64)
++    # axes = np.array([1], dtype=np.int64)
++    # steps = np.array([1], dtype=np.int64)
++    # y = x[:, 1000:1000]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_neg  pass
++    x = np.random.randn(20, 1, 5).astype(np.float32)
++    starts = np.array([0], dtype=np.int64)
++    ends = np.array([-1], dtype=np.int64)
++    axes = np.array([1], dtype=np.int64)
++    steps = np.array([1], dtype=np.int64)
++    y = x[:, 0:-1]
++    _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_neg_steps pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([20, 10, 4], dtype=np.int64)
++    # ends = np.array([0, 0, 1], dtype=np.int64)
++    # axes = np.array([0, 1, 2], dtype=np.int64)
++    # steps = np.array([-1, -3, -2])
++    # y = x[20:0:-1, 10:0:-3, 4:1:-2]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4),(0,1,2),(1,1,1))
++    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1),(1))
++    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1),(1))
++
++
+ 
+ def _test_onnx_op_elementwise(inshape, outfunc, npargs, dtype, opname, kwargs):
+     indata = np.random.uniform(-1, 1, size=inshape).astype(dtype)
+@@ -504,9 +563,19 @@ def test_upsample():
+ 
+ def _test_softmax(inshape, axis):
+     opname = 'Softmax'
+-    indata = np.random.uniform(size=inshape).astype(np.float32)
+-    outshape = inshape
++    # indata = np.random.uniform(size=inshape).astype(np.float32)
++    indata = np.array([[-1, 0, 1]]).astype(np.float32)
++    #indata = np.array([[0.35453674,0.01457328, 0.46842068, 0.59987897, 0.55332774, 0.71276087,
++    #        0.76801485, 0.8898429, 0.70029914, 0.13914116]])
++    #outdata = np.array([[0.08196373, 0.05834148, 0.09185036, 0.10475445, 0.09998976, 0.11727257,
++    #        0.12393471, 0.13999167, 0.11582022, 0.06608099]])
++
++    #indata = np.array([[0.18807387,0.933488,0.98817325,0.23373312, 0.77443016, 0.71994233,0.8982389,  0.55535364, 0.04795488, 0.46587774]])
++    #outdata = np.array([[0.06432133, 0.13554525, 0.143164,0.06732628, 0.11561292, 0.10948196,0.13085063, 0.09286726, 0.05591163, 0.08491878]])
++
++    outshape = indata.shape
+     outdata = topi.testing.softmax_python(indata)
++    print("indata:{}\noutdata:{}".format(indata,outdata))
+     if isinstance(axis, int):
+         y = helper.make_node(opname, ['in'], ['out'], axis = axis)
+     elif axis is None:
+@@ -520,14 +589,14 @@ def _test_softmax(inshape, axis):
+                                             TensorProto.FLOAT, list(outdata.shape))])
+ 
+     model = helper.make_model(graph, producer_name=opname+'_test')
+-
++    onnx.save_model(model,'Softmax.onnx')
+     for target, ctx in ctx_list():
+         tvm_out = get_tvm_output(model, indata, target, ctx, outshape, 'float32')
+-        tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
++    tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
+ 
+ def test_softmax():
+     _test_softmax((1, 10), None)
+-    _test_softmax((1, 10), 1)
++    # _test_softmax((1, 10), 1)
+ 
+ def verify_min(input_dim):
+     dtype = 'float32'
+@@ -1317,8 +1386,11 @@ def test_forward_nms():
+ 
+ 
+ if __name__ == '__main__':
+-    test_forward_nms()
+-    # test_slice()
++    # test_forward_nms()
++    test_slice()
++    #test_unsqueeze()
++    # test_softmax()
++    # test_squeeze()
+     '''
+     test_flatten()
+     test_reshape()

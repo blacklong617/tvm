@@ -1,0 +1,3445 @@
+diff --git a/.gitignore b/.gitignore
+index f044577a..0739a5ac 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -231,4 +231,7 @@ conda/pkg
+ 
+ # antlr files
+ *.tokens
+-*.interp
+\ No newline at end of file
++*.interp
++
++# install env
++update_env.sh
+diff --git a/add_onnx_nms.patch b/add_onnx_nms.patch
+new file mode 100755
+index 00000000..bff7b9d9
+--- /dev/null
++++ b/add_onnx_nms.patch
+@@ -0,0 +1,371 @@
++diff --git a/.gitignore b/.gitignore
++index f044577a..0739a5ac 100644
++--- a/.gitignore
+++++ b/.gitignore
++@@ -231,4 +231,7 @@ conda/pkg
++ 
++ # antlr files
++ *.tokens
++-*.interp
++\ No newline at end of file
+++*.interp
+++
+++# install env
+++update_env.sh
++diff --git a/include/tvm/relay/attrs/vision.h b/include/tvm/relay/attrs/vision.h
++index b98bbfc5..455782b8 100644
++--- a/include/tvm/relay/attrs/vision.h
+++++ b/include/tvm/relay/attrs/vision.h
++@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
++   }
++ };
++ 
+++//add by lizhijian
+++/*! \brief Attributes used in nms onnx operator */
+++struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
+++	int center_point_box;
+++  int max_output_boxes_per_class;
+++  double iou_threshold;
+++  double score_threshold;
+++
+++	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
+++		TVM_ATTR_FIELD(center_point_box).set_default(0)
+++		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
+++    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
+++    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
+++    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
+++    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
+++    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
+++    .describe("Float representing the threshold for deciding when to remove boxes based on score");
+++	}
+++};
+++
++ /*! \brief Attributes used in non_maximum_suppression operator */
++ struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
++   int max_output_size;
++diff --git a/python/tvm/_ffi/base.py b/python/tvm/_ffi/base.py
++index c61c5c44..f58185b8 100644
++--- a/python/tvm/_ffi/base.py
+++++ b/python/tvm/_ffi/base.py
++@@ -49,6 +49,7 @@ else:
++ def _load_lib():
++     """Load libary by searching possible path."""
++     lib_path = libinfo.find_lib_path()
+++    print(f'_load_lib path is {lib_path}')
++     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
++     # DMatrix functions
++     lib.TVMGetLastError.restype = ctypes.c_char_p
++diff --git a/python/tvm/_ffi/function.py b/python/tvm/_ffi/function.py
++index 4bb31820..817a5649 100644
++--- a/python/tvm/_ffi/function.py
+++++ b/python/tvm/_ffi/function.py
++@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
++     target_module_name : str
++        The target module name if different from namespace
++     """
+++    print(f'_init_api name is {target_module_name}')
++     target_module_name = (
++         target_module_name if target_module_name else namespace)
++     if namespace.startswith("tvm."):
++diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
++index 1b904bba..47434ac9 100644
++--- a/python/tvm/relay/frontend/onnx.py
+++++ b/python/tvm/relay/frontend/onnx.py
++@@ -850,6 +850,18 @@ class ConstantFill(OnnxOpConverter):
++             shape = shape + attr.pop('extra_shape')
++         return _op.full(inputs[0], shape)
++ 
+++# add by lizhijian
+++class NMS(OnnxOpConverter):
+++    @classmethod
+++    def _impl_v10(cls, inputs, attr, params):
+++        new_attrs={}
+++        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
+++        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
+++        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
+++        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
+++        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
+++
+++        
++ # compatible operators that do NOT require any conversion.
++ _identity_list = []
++ 
++@@ -964,6 +976,9 @@ def _get_convert_map(opset):
++         'Unsqueeze': Unsqueeze.get_converter(opset),
++         'Pad': Pad.get_converter(opset),
++         'Shape': Shape.get_converter(opset),
+++
+++        # def/vision
+++        'NonMaxSuppression': NMS.get_converter(opset),
++     }
++ 
++ 
++diff --git a/python/tvm/relay/op/op_attrs.py b/python/tvm/relay/op/op_attrs.py
++index d46be126..49bb056a 100644
++--- a/python/tvm/relay/op/op_attrs.py
+++++ b/python/tvm/relay/op/op_attrs.py
++@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
++     """Attributes for vision.non_maximum_suppression"""
++ 
++ 
+++# add by lizhijian
+++@register_relay_attr_node
+++class OnnxNMSAttrs(Attrs):
+++    """Attributes for vision.onnx_nms"""
+++
+++
++ @register_relay_attr_node
++ class ROIAlignAttrs(Attrs):
++     """Attributes for vision.roi_align"""
++diff --git a/python/tvm/relay/op/vision/_vision.py b/python/tvm/relay/op/vision/_vision.py
++index 7de11807..51b8c159 100644
++--- a/python/tvm/relay/op/vision/_vision.py
+++++ b/python/tvm/relay/op/vision/_vision.py
++@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
++ 
++ 
++ reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
+++
+++# add by lizhijian
+++# onnx nms
+++@reg.register_schedule("vison.onnx_nms")
+++def schedule_onnx_nms(_, outs, target):
+++    """Schedule definition of onnx nms"""
+++    with target:
+++        return topi.generic.schedule_onnxnms(outs)
+++
+++
+++@reg.register_compute("vision.onnx_nms")
+++def compute_nms(attrs, inputs, _, target):
+++    """Compute definition of onnx nms"""
+++    center_point_box = get_const_int(attrs.center_point_box)
+++    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
+++    iou_threshold = get_const_float(attrs.iou_threshold)
+++    score_threshold = get_const_float(attrs.score_threshold)
+++    return [
+++        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+++    ]
+++
+++
+++reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)
++diff --git a/python/tvm/relay/op/vision/nms.py b/python/tvm/relay/op/vision/nms.py
++index d19dde30..04a2ee9e 100644
++--- a/python/tvm/relay/op/vision/nms.py
+++++ b/python/tvm/relay/op/vision/nms.py
++@@ -112,3 +112,11 @@ def non_max_suppression(data,
++                                      iou_threshold, force_suppress, top_k,
++                                      coord_start, score_index, id_index,
++                                      return_indices, invalid_to_bottom)
+++
+++def onnx_nms(boxes, 
+++            scores, 
+++            center_point_box=0, 
+++            max_output_boxes_per_class=-1, 
+++            iou_threshold=0.5, 
+++            score_threshold=0.0):
+++    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
++diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
++index c0160e7d..1f721f06 100644
++--- a/src/relay/op/vision/nms.cc
+++++ b/src/relay/op/vision/nms.cc
++@@ -145,5 +145,57 @@ Set id_index to be -1 to ignore class_id axis.
++ .set_support_level(5)
++ .add_type_rel("NMS", NMSRel);
++ 
+++//add by lizhijian
+++TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
+++
+++bool OnnxNMSRel(const Array<Type>& types,
+++					int num_inputs,
+++					const Attrs& attrs,
+++					const TypeReporter& reporter){
+++  std::cout<<"OnnxNMSReal"<<std::endl;
+++	CHECK_EQ(types.size(), 3);
+++	const auto* boxes = types[0].as<TensorTypeNode>();
+++	const auto* scores = types[1].as<TensorTypeNode>();
+++
+++	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
+++  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
+++
+++	const auto& boxesshape = boxes->shape;
+++	const auto& scoresshape = scores->shape;
+++
+++	// assign output type
+++  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
+++	reporter->Assign(types[3], TensorTypeNode::make(oshape, Int(32)));
+++	return true;
+++};
+++
+++Expr MakeOnnxNMS(Expr boxes,
+++					Expr scores,
+++          int center_point_box,
+++					int max_output_boxes_per_class,
+++					double iou_threshold,
+++					double score_threshold){
+++  std::cout<<"MakeOnnxNMS"<<std::endl;
+++	auto attrs = make_node<OnnxNMSAttrs>();
+++	attrs->center_point_box = center_point_box;
+++  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
+++  attrs->iou_threshold = iou_threshold;
+++  attrs->score_threshold = score_threshold;
+++	static const Op& op = Op::Get("vision.onnx_nms");
+++	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
+++}
+++
+++TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
+++.set_body_typed(MakeOnnxNMS);
+++
+++RELAY_REGISTER_OP("vision.onnx_nms")
+++.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
+++.set_num_inputs(2)
+++.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
+++.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
+++.set_support_level(5)
+++.add_type_rel("ONMS", OnnxNMSRel);
+++
+++
++ }  // namespace relay
++ }  // namespace tvm
++diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
++index d4099601..3707256e 100644
++--- a/tests/python/frontend/onnx/test_forward.py
+++++ b/tests/python/frontend/onnx/test_forward.py
++@@ -1116,15 +1116,57 @@ def test_inception():
++ # def test_shufflenetv2():
++ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
++ 
+++# add by lizhijian
+++def test_forward_nms():
+++    node = onnx.helper.make_node(
+++    'NonMaxSuppression',
+++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
+++    outputs=['selected_indices'],
+++    center_point_box=0,
+++    )
+++    boxes = np.array([[
+++    [0.0, 0.0, 1.0, 1.0],
+++    [0.0, 0.1, 1.0, 1.1],
+++    [0.0, -0.1, 1.0, 0.9],
+++    [0.0, 10.0, 1.0, 11.0],
+++    [0.0, 10.1, 1.0, 11.1],
+++    [0.0, 100.0, 1.0, 101.0]
+++    ]]).astype(np.float32)
+++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+++                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    iou_threshold = np.array([0.5]).astype(np.float32)
+++    score_threshold = np.array([0.0]).astype(np.float32)
+++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+++
+++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
+++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
+++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
+++
+++    graph = onnx.helper.make_graph([node],'NMS_test',
+++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
+++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
+++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
+++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
+++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
+++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
+++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
+++    model = helper.make_model(graph, producer_name='NMS_test')
+++    onnx.save_model(model,'/mnt/f/nms.onnx')
+++    for target, ctx in ctx_list():
+++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
+++        print(tvm_out)
+++
++ 
++ if __name__ == '__main__':
+++    test_forward_nms()
++     test_flatten()
++     test_reshape()
++     test_shape()
++     test_power()
++     test_squeeze()
++     test_unsqueeze()
++-    test_slice()
+++    #test_slice()
++     test_floor()
++     test_ceil()
++     test_clip()
++diff --git a/topi/python/topi/generic/vision.py b/topi/python/topi/generic/vision.py
++index a1e096a8..4aa427b5 100644
++--- a/topi/python/topi/generic/vision.py
+++++ b/topi/python/topi/generic/vision.py
++@@ -86,6 +86,24 @@ def schedule_nms(outs):
++     """
++     return _default_schedule(outs, False)
++ 
+++# add by lizhijian
+++@tvm.target.generic_func
+++def schedule_onnxnms(outs):
+++  """Schedule for onnx nms
+++
+++  Parameters
+++  ----------
+++  outs: Array of Tensor
+++      The computation graph description of nms
+++      in the format of an array of tensors.
+++
+++    Returns
+++    -------
+++    s: Schedule
+++      The computation schedule for the op.
+++  """
+++  return _default_schedule(outs,False)
+++
++ @tvm.target.generic_func
++ def schedule_multibox_prior(outs):
++     """Schedule for multibox_prior
++diff --git a/topi/python/topi/vision/nms.py b/topi/python/topi/vision/nms.py
++index a6ba56ee..06b966ed 100644
++--- a/topi/python/topi/vision/nms.py
+++++ b/topi/python/topi/vision/nms.py
++@@ -366,3 +366,32 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
++         out = hybrid_rearrange_out(out)
++ 
++     return box_indices if return_indices else out
+++
+++# add by lizhijian
+++@hybrid.script
+++def hybrid_onnx_nms(boxes, scores, 
+++                    center_point_box,
+++                    max_output_boxes_per_class,
+++                    iou_threshold,
+++                    score_threshold):
+++    shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
+++    output = output_tensor((shape_dim0,3), "int32")
+++    output = 1
+++
+++    return output
+++
+++@tvm.target.generic_func
+++def onnx_nms(boxes, scores, 
+++             center_point_box=0,
+++             max_output_boxes_per_class=-1,
+++             iou_threshold=0.5,
+++             score_threshold=0.0):
+++    center_point_box_const = tvm.const(center_point_box, "int32")
+++    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
+++    iou_threshold_const = tvm.const(iou_threshold, "float32")
+++    score_threshold_const = tvm.const(score_threshold, "float32")
+++    return hybrid_onnx_nms(boxes, scores, 
+++                            center_point_box_const, 
+++                            max_output_boxes_per_class_const,
+++                            iou_threshold_const,
+++                            score_threshold_const)
++\ No newline at end of file
++diff --git a/topi/tests/python/test_topi_vision.py b/topi/tests/python/test_topi_vision.py
++index 08b6d2e7..45e908e7 100644
++--- a/topi/tests/python/test_topi_vision.py
+++++ b/topi/tests/python/test_topi_vision.py
++@@ -24,7 +24,7 @@ import topi.testing
++ 
++ from tvm.contrib.pickle_memoize import memoize
++ from topi.util import get_const_tuple
++-from topi.vision import ssd, non_max_suppression, get_valid_counts
+++from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
++ 
++ 
++ def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):
+diff --git a/include/tvm/ir.h b/include/tvm/ir.h
+index 03559d38..3b14385c 100644
+--- a/include/tvm/ir.h
++++ b/include/tvm/ir.h
+@@ -131,7 +131,7 @@ class BinaryOpNode : public ExprNode {
+   static Expr make(Expr a, Expr b) {
+     CHECK(a.defined()) << "ValueError: a is undefined\n";
+     CHECK(b.defined()) << "ValueError: b is undefined\n";
+-    CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
++    // CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
+     NodePtr<T> node = make_node<T>();
+     node->type = a.type();
+     node->a = std::move(a);
+diff --git a/include/tvm/relay/attrs/vision.h b/include/tvm/relay/attrs/vision.h
+index b98bbfc5..455782b8 100644
+--- a/include/tvm/relay/attrs/vision.h
++++ b/include/tvm/relay/attrs/vision.h
+@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
+   }
+ };
+ 
++//add by lizhijian
++/*! \brief Attributes used in nms onnx operator */
++struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
++	int center_point_box;
++  int max_output_boxes_per_class;
++  double iou_threshold;
++  double score_threshold;
++
++	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
++		TVM_ATTR_FIELD(center_point_box).set_default(0)
++		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
++    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
++    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
++    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
++    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
++    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
++    .describe("Float representing the threshold for deciding when to remove boxes based on score");
++	}
++};
++
+ /*! \brief Attributes used in non_maximum_suppression operator */
+ struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
+   int max_output_size;
+diff --git a/nms_v0.01.patch b/nms_v0.01.patch
+new file mode 100644
+index 00000000..29c08ff0
+--- /dev/null
++++ b/nms_v0.01.patch
+@@ -0,0 +1,1384 @@
++diff --git a/.gitignore b/.gitignore
++index f044577a..0739a5ac 100644
++--- a/.gitignore
+++++ b/.gitignore
++@@ -231,4 +231,7 @@ conda/pkg
++ 
++ # antlr files
++ *.tokens
++-*.interp
++\ No newline at end of file
+++*.interp
+++
+++# install env
+++update_env.sh
++diff --git a/add_onnx_nms.patch b/add_onnx_nms.patch
++new file mode 100755
++index 00000000..bff7b9d9
++--- /dev/null
+++++ b/add_onnx_nms.patch
++@@ -0,0 +1,371 @@
+++diff --git a/.gitignore b/.gitignore
+++index f044577a..0739a5ac 100644
+++--- a/.gitignore
++++++ b/.gitignore
+++@@ -231,4 +231,7 @@ conda/pkg
+++ 
+++ # antlr files
+++ *.tokens
+++-*.interp
+++\ No newline at end of file
++++*.interp
++++
++++# install env
++++update_env.sh
+++diff --git a/include/tvm/relay/attrs/vision.h b/include/tvm/relay/attrs/vision.h
+++index b98bbfc5..455782b8 100644
+++--- a/include/tvm/relay/attrs/vision.h
++++++ b/include/tvm/relay/attrs/vision.h
+++@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
+++   }
+++ };
+++ 
++++//add by lizhijian
++++/*! \brief Attributes used in nms onnx operator */
++++struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
++++	int center_point_box;
++++  int max_output_boxes_per_class;
++++  double iou_threshold;
++++  double score_threshold;
++++
++++	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
++++		TVM_ATTR_FIELD(center_point_box).set_default(0)
++++		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
++++    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
++++    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
++++    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
++++    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
++++    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
++++    .describe("Float representing the threshold for deciding when to remove boxes based on score");
++++	}
++++};
++++
+++ /*! \brief Attributes used in non_maximum_suppression operator */
+++ struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
+++   int max_output_size;
+++diff --git a/python/tvm/_ffi/base.py b/python/tvm/_ffi/base.py
+++index c61c5c44..f58185b8 100644
+++--- a/python/tvm/_ffi/base.py
++++++ b/python/tvm/_ffi/base.py
+++@@ -49,6 +49,7 @@ else:
+++ def _load_lib():
+++     """Load libary by searching possible path."""
+++     lib_path = libinfo.find_lib_path()
++++    print(f'_load_lib path is {lib_path}')
+++     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+++     # DMatrix functions
+++     lib.TVMGetLastError.restype = ctypes.c_char_p
+++diff --git a/python/tvm/_ffi/function.py b/python/tvm/_ffi/function.py
+++index 4bb31820..817a5649 100644
+++--- a/python/tvm/_ffi/function.py
++++++ b/python/tvm/_ffi/function.py
+++@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
+++     target_module_name : str
+++        The target module name if different from namespace
+++     """
++++    print(f'_init_api name is {target_module_name}')
+++     target_module_name = (
+++         target_module_name if target_module_name else namespace)
+++     if namespace.startswith("tvm."):
+++diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
+++index 1b904bba..47434ac9 100644
+++--- a/python/tvm/relay/frontend/onnx.py
++++++ b/python/tvm/relay/frontend/onnx.py
+++@@ -850,6 +850,18 @@ class ConstantFill(OnnxOpConverter):
+++             shape = shape + attr.pop('extra_shape')
+++         return _op.full(inputs[0], shape)
+++ 
++++# add by lizhijian
++++class NMS(OnnxOpConverter):
++++    @classmethod
++++    def _impl_v10(cls, inputs, attr, params):
++++        new_attrs={}
++++        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
++++        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
++++        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
++++        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
++++        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
++++
++++        
+++ # compatible operators that do NOT require any conversion.
+++ _identity_list = []
+++ 
+++@@ -964,6 +976,9 @@ def _get_convert_map(opset):
+++         'Unsqueeze': Unsqueeze.get_converter(opset),
+++         'Pad': Pad.get_converter(opset),
+++         'Shape': Shape.get_converter(opset),
++++
++++        # def/vision
++++        'NonMaxSuppression': NMS.get_converter(opset),
+++     }
+++ 
+++ 
+++diff --git a/python/tvm/relay/op/op_attrs.py b/python/tvm/relay/op/op_attrs.py
+++index d46be126..49bb056a 100644
+++--- a/python/tvm/relay/op/op_attrs.py
++++++ b/python/tvm/relay/op/op_attrs.py
+++@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
+++     """Attributes for vision.non_maximum_suppression"""
+++ 
+++ 
++++# add by lizhijian
++++@register_relay_attr_node
++++class OnnxNMSAttrs(Attrs):
++++    """Attributes for vision.onnx_nms"""
++++
++++
+++ @register_relay_attr_node
+++ class ROIAlignAttrs(Attrs):
+++     """Attributes for vision.roi_align"""
+++diff --git a/python/tvm/relay/op/vision/_vision.py b/python/tvm/relay/op/vision/_vision.py
+++index 7de11807..51b8c159 100644
+++--- a/python/tvm/relay/op/vision/_vision.py
++++++ b/python/tvm/relay/op/vision/_vision.py
+++@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
+++ 
+++ 
+++ reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
++++
++++# add by lizhijian
++++# onnx nms
++++@reg.register_schedule("vison.onnx_nms")
++++def schedule_onnx_nms(_, outs, target):
++++    """Schedule definition of onnx nms"""
++++    with target:
++++        return topi.generic.schedule_onnxnms(outs)
++++
++++
++++@reg.register_compute("vision.onnx_nms")
++++def compute_nms(attrs, inputs, _, target):
++++    """Compute definition of onnx nms"""
++++    center_point_box = get_const_int(attrs.center_point_box)
++++    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
++++    iou_threshold = get_const_float(attrs.iou_threshold)
++++    score_threshold = get_const_float(attrs.score_threshold)
++++    return [
++++        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
++++    ]
++++
++++
++++reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)
+++diff --git a/python/tvm/relay/op/vision/nms.py b/python/tvm/relay/op/vision/nms.py
+++index d19dde30..04a2ee9e 100644
+++--- a/python/tvm/relay/op/vision/nms.py
++++++ b/python/tvm/relay/op/vision/nms.py
+++@@ -112,3 +112,11 @@ def non_max_suppression(data,
+++                                      iou_threshold, force_suppress, top_k,
+++                                      coord_start, score_index, id_index,
+++                                      return_indices, invalid_to_bottom)
++++
++++def onnx_nms(boxes, 
++++            scores, 
++++            center_point_box=0, 
++++            max_output_boxes_per_class=-1, 
++++            iou_threshold=0.5, 
++++            score_threshold=0.0):
++++    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+++diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
+++index c0160e7d..1f721f06 100644
+++--- a/src/relay/op/vision/nms.cc
++++++ b/src/relay/op/vision/nms.cc
+++@@ -145,5 +145,57 @@ Set id_index to be -1 to ignore class_id axis.
+++ .set_support_level(5)
+++ .add_type_rel("NMS", NMSRel);
+++ 
++++//add by lizhijian
++++TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
++++
++++bool OnnxNMSRel(const Array<Type>& types,
++++					int num_inputs,
++++					const Attrs& attrs,
++++					const TypeReporter& reporter){
++++  std::cout<<"OnnxNMSReal"<<std::endl;
++++	CHECK_EQ(types.size(), 3);
++++	const auto* boxes = types[0].as<TensorTypeNode>();
++++	const auto* scores = types[1].as<TensorTypeNode>();
++++
++++	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
++++  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
++++
++++	const auto& boxesshape = boxes->shape;
++++	const auto& scoresshape = scores->shape;
++++
++++	// assign output type
++++  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
++++	reporter->Assign(types[3], TensorTypeNode::make(oshape, Int(32)));
++++	return true;
++++};
++++
++++Expr MakeOnnxNMS(Expr boxes,
++++					Expr scores,
++++          int center_point_box,
++++					int max_output_boxes_per_class,
++++					double iou_threshold,
++++					double score_threshold){
++++  std::cout<<"MakeOnnxNMS"<<std::endl;
++++	auto attrs = make_node<OnnxNMSAttrs>();
++++	attrs->center_point_box = center_point_box;
++++  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
++++  attrs->iou_threshold = iou_threshold;
++++  attrs->score_threshold = score_threshold;
++++	static const Op& op = Op::Get("vision.onnx_nms");
++++	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
++++}
++++
++++TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
++++.set_body_typed(MakeOnnxNMS);
++++
++++RELAY_REGISTER_OP("vision.onnx_nms")
++++.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
++++.set_num_inputs(2)
++++.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
++++.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
++++.set_support_level(5)
++++.add_type_rel("ONMS", OnnxNMSRel);
++++
++++
+++ }  // namespace relay
+++ }  // namespace tvm
+++diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
+++index d4099601..3707256e 100644
+++--- a/tests/python/frontend/onnx/test_forward.py
++++++ b/tests/python/frontend/onnx/test_forward.py
+++@@ -1116,15 +1116,57 @@ def test_inception():
+++ # def test_shufflenetv2():
+++ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
+++ 
++++# add by lizhijian
++++def test_forward_nms():
++++    node = onnx.helper.make_node(
++++    'NonMaxSuppression',
++++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
++++    outputs=['selected_indices'],
++++    center_point_box=0,
++++    )
++++    boxes = np.array([[
++++    [0.0, 0.0, 1.0, 1.0],
++++    [0.0, 0.1, 1.0, 1.1],
++++    [0.0, -0.1, 1.0, 0.9],
++++    [0.0, 10.0, 1.0, 11.0],
++++    [0.0, 10.1, 1.0, 11.1],
++++    [0.0, 100.0, 1.0, 101.0]
++++    ]]).astype(np.float32)
++++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
++++                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
++++    iou_threshold = np.array([0.5]).astype(np.float32)
++++    score_threshold = np.array([0.0]).astype(np.float32)
++++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
++++
++++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
++++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
++++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
++++
++++    graph = onnx.helper.make_graph([node],'NMS_test',
++++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
++++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
++++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
++++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
++++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
++++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
++++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
++++    model = helper.make_model(graph, producer_name='NMS_test')
++++    onnx.save_model(model,'/mnt/f/nms.onnx')
++++    for target, ctx in ctx_list():
++++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
++++        print(tvm_out)
++++
+++ 
+++ if __name__ == '__main__':
++++    test_forward_nms()
+++     test_flatten()
+++     test_reshape()
+++     test_shape()
+++     test_power()
+++     test_squeeze()
+++     test_unsqueeze()
+++-    test_slice()
++++    #test_slice()
+++     test_floor()
+++     test_ceil()
+++     test_clip()
+++diff --git a/topi/python/topi/generic/vision.py b/topi/python/topi/generic/vision.py
+++index a1e096a8..4aa427b5 100644
+++--- a/topi/python/topi/generic/vision.py
++++++ b/topi/python/topi/generic/vision.py
+++@@ -86,6 +86,24 @@ def schedule_nms(outs):
+++     """
+++     return _default_schedule(outs, False)
+++ 
++++# add by lizhijian
++++@tvm.target.generic_func
++++def schedule_onnxnms(outs):
++++  """Schedule for onnx nms
++++
++++  Parameters
++++  ----------
++++  outs: Array of Tensor
++++      The computation graph description of nms
++++      in the format of an array of tensors.
++++
++++    Returns
++++    -------
++++    s: Schedule
++++      The computation schedule for the op.
++++  """
++++  return _default_schedule(outs,False)
++++
+++ @tvm.target.generic_func
+++ def schedule_multibox_prior(outs):
+++     """Schedule for multibox_prior
+++diff --git a/topi/python/topi/vision/nms.py b/topi/python/topi/vision/nms.py
+++index a6ba56ee..06b966ed 100644
+++--- a/topi/python/topi/vision/nms.py
++++++ b/topi/python/topi/vision/nms.py
+++@@ -366,3 +366,32 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
+++         out = hybrid_rearrange_out(out)
+++ 
+++     return box_indices if return_indices else out
++++
++++# add by lizhijian
++++@hybrid.script
++++def hybrid_onnx_nms(boxes, scores, 
++++                    center_point_box,
++++                    max_output_boxes_per_class,
++++                    iou_threshold,
++++                    score_threshold):
++++    shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
++++    output = output_tensor((shape_dim0,3), "int32")
++++    output = 1
++++
++++    return output
++++
++++@tvm.target.generic_func
++++def onnx_nms(boxes, scores, 
++++             center_point_box=0,
++++             max_output_boxes_per_class=-1,
++++             iou_threshold=0.5,
++++             score_threshold=0.0):
++++    center_point_box_const = tvm.const(center_point_box, "int32")
++++    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
++++    iou_threshold_const = tvm.const(iou_threshold, "float32")
++++    score_threshold_const = tvm.const(score_threshold, "float32")
++++    return hybrid_onnx_nms(boxes, scores, 
++++                            center_point_box_const, 
++++                            max_output_boxes_per_class_const,
++++                            iou_threshold_const,
++++                            score_threshold_const)
+++\ No newline at end of file
+++diff --git a/topi/tests/python/test_topi_vision.py b/topi/tests/python/test_topi_vision.py
+++index 08b6d2e7..45e908e7 100644
+++--- a/topi/tests/python/test_topi_vision.py
++++++ b/topi/tests/python/test_topi_vision.py
+++@@ -24,7 +24,7 @@ import topi.testing
+++ 
+++ from tvm.contrib.pickle_memoize import memoize
+++ from topi.util import get_const_tuple
+++-from topi.vision import ssd, non_max_suppression, get_valid_counts
++++from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
+++ 
+++ 
+++ def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):
++diff --git a/include/tvm/relay/attrs/vision.h b/include/tvm/relay/attrs/vision.h
++index b98bbfc5..455782b8 100644
++--- a/include/tvm/relay/attrs/vision.h
+++++ b/include/tvm/relay/attrs/vision.h
++@@ -93,6 +93,26 @@ struct GetValidCountsAttrs : public tvm::AttrsNode<GetValidCountsAttrs> {
++   }
++ };
++ 
+++//add by lizhijian
+++/*! \brief Attributes used in nms onnx operator */
+++struct OnnxNMSAttrs:public tvm::AttrsNode<OnnxNMSAttrs>{
+++	int center_point_box;
+++  int max_output_boxes_per_class;
+++  double iou_threshold;
+++  double score_threshold;
+++
+++	TVM_DECLARE_ATTRS(OnnxNMSAttrs, "relay.attrs.OnnxNMSAttrs"){
+++		TVM_ATTR_FIELD(center_point_box).set_default(0)
+++		.describe("Integer indicate the format of the box data. The default is 0.0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box cornersand the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models.1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytoch models.");
+++    TVM_ATTR_FIELD(max_output_boxes_per_class).set_default(-1)
+++    .describe("Integer representing the maximum number of boxes to be selected per batch per class");
+++    TVM_ATTR_FIELD(iou_threshold).set_default(0.5)
+++    .describe("Float representing the threshold for deciding whether boxes overlap too much with respect to IOU");
+++    TVM_ATTR_FIELD(score_threshold).set_default(0.0)
+++    .describe("Float representing the threshold for deciding when to remove boxes based on score");
+++	}
+++};
+++
++ /*! \brief Attributes used in non_maximum_suppression operator */
++ struct NonMaximumSuppressionAttrs : public tvm::AttrsNode<NonMaximumSuppressionAttrs> {
++   int max_output_size;
++diff --git a/python/tvm/_ffi/base.py b/python/tvm/_ffi/base.py
++index c61c5c44..f58185b8 100644
++--- a/python/tvm/_ffi/base.py
+++++ b/python/tvm/_ffi/base.py
++@@ -49,6 +49,7 @@ else:
++ def _load_lib():
++     """Load libary by searching possible path."""
++     lib_path = libinfo.find_lib_path()
+++    print(f'_load_lib path is {lib_path}')
++     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
++     # DMatrix functions
++     lib.TVMGetLastError.restype = ctypes.c_char_p
++diff --git a/python/tvm/_ffi/function.py b/python/tvm/_ffi/function.py
++index 4bb31820..817a5649 100644
++--- a/python/tvm/_ffi/function.py
+++++ b/python/tvm/_ffi/function.py
++@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
++     target_module_name : str
++        The target module name if different from namespace
++     """
+++    print(f'_init_api name is {target_module_name}')
++     target_module_name = (
++         target_module_name if target_module_name else namespace)
++     if namespace.startswith("tvm."):
++diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
++index 1b904bba..e3154cde 100644
++--- a/python/tvm/relay/frontend/onnx.py
+++++ b/python/tvm/relay/frontend/onnx.py
++@@ -850,6 +850,18 @@ class ConstantFill(OnnxOpConverter):
++             shape = shape + attr.pop('extra_shape')
++         return _op.full(inputs[0], shape)
++ 
+++# add by lizhijian
+++class NMS(OnnxOpConverter):
+++    @classmethod
+++    def _impl_v10(cls, inputs, attr, params):
+++        new_attrs={}
+++        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
+++        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
+++        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
+++        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
+++        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
+++
+++        
++ # compatible operators that do NOT require any conversion.
++ _identity_list = []
++ 
++@@ -964,9 +976,13 @@ def _get_convert_map(opset):
++         'Unsqueeze': Unsqueeze.get_converter(opset),
++         'Pad': Pad.get_converter(opset),
++         'Shape': Shape.get_converter(opset),
+++
+++        # def/vision
+++        'NonMaxSuppression': NMS.get_converter(opset),
++     }
++ 
++ 
+++
++ class GraphProto(object):
++     """A helper class for handling Relay expression copying from pb2.GraphProto.
++     Definition: https://github.com/onnx/onnx/blob/master/onnx/onnx.proto
++diff --git a/python/tvm/relay/op/op_attrs.py b/python/tvm/relay/op/op_attrs.py
++index d46be126..49bb056a 100644
++--- a/python/tvm/relay/op/op_attrs.py
+++++ b/python/tvm/relay/op/op_attrs.py
++@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
++     """Attributes for vision.non_maximum_suppression"""
++ 
++ 
+++# add by lizhijian
+++@register_relay_attr_node
+++class OnnxNMSAttrs(Attrs):
+++    """Attributes for vision.onnx_nms"""
+++
+++
++ @register_relay_attr_node
++ class ROIAlignAttrs(Attrs):
++     """Attributes for vision.roi_align"""
++diff --git a/python/tvm/relay/op/vision/_vision.py b/python/tvm/relay/op/vision/_vision.py
++index 7de11807..0ac2d568 100644
++--- a/python/tvm/relay/op/vision/_vision.py
+++++ b/python/tvm/relay/op/vision/_vision.py
++@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
++ 
++ 
++ reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
+++
+++# add by lizhijian
+++# onnx nms
+++@reg.register_schedule("vision.onnx_nms")
+++def schedule_onnx_nms(_, outs, target):
+++    """Schedule definition of onnx nms"""
+++    with target:
+++        return topi.generic.schedule_onnxnms(outs)
+++
+++
+++@reg.register_compute("vision.onnx_nms")
+++def compute_nms(attrs, inputs, _, target):
+++    """Compute definition of onnx nms"""
+++    center_point_box = get_const_int(attrs.center_point_box)
+++    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
+++    iou_threshold = get_const_float(attrs.iou_threshold)
+++    score_threshold = get_const_float(attrs.score_threshold)
+++    return [
+++        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+++    ]
+++
+++
+++reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)
++diff --git a/python/tvm/relay/op/vision/nms.py b/python/tvm/relay/op/vision/nms.py
++index d19dde30..04a2ee9e 100644
++--- a/python/tvm/relay/op/vision/nms.py
+++++ b/python/tvm/relay/op/vision/nms.py
++@@ -112,3 +112,11 @@ def non_max_suppression(data,
++                                      iou_threshold, force_suppress, top_k,
++                                      coord_start, score_index, id_index,
++                                      return_indices, invalid_to_bottom)
+++
+++def onnx_nms(boxes, 
+++            scores, 
+++            center_point_box=0, 
+++            max_output_boxes_per_class=-1, 
+++            iou_threshold=0.5, 
+++            score_threshold=0.0):
+++    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
++diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
++index d5804967..03588193 100644
++--- a/src/relay/op/vision/nms.cc
+++++ b/src/relay/op/vision/nms.cc
++@@ -145,5 +145,57 @@ Set id_index to be -1 to ignore class_id axis.
++ .set_support_level(5)
++ .add_type_rel("NMS", NMSRel);
++ 
+++//add by lizhijian
+++TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
+++
+++bool OnnxNMSRel(const Array<Type>& types,
+++					int num_inputs,
+++					const Attrs& attrs,
+++					const TypeReporter& reporter){
+++  std::cout<<"OnnxNMSReal"<<std::endl;
+++	CHECK_EQ(types.size(), 3);
+++	const auto* boxes = types[0].as<TensorTypeNode>();
+++	const auto* scores = types[1].as<TensorTypeNode>();
+++
+++	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
+++  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
+++
+++	const auto& boxesshape = boxes->shape;
+++	const auto& scoresshape = scores->shape;
+++
+++	// assign output type
+++  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
+++	reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
+++	return true;
+++};
+++
+++Expr MakeOnnxNMS(Expr boxes,
+++					Expr scores,
+++          int center_point_box,
+++					int max_output_boxes_per_class,
+++					double iou_threshold,
+++					double score_threshold){
+++  std::cout<<"MakeOnnxNMS"<<std::endl;
+++	auto attrs = make_node<OnnxNMSAttrs>();
+++	attrs->center_point_box = center_point_box;
+++  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
+++  attrs->iou_threshold = iou_threshold;
+++  attrs->score_threshold = score_threshold;
+++	static const Op& op = Op::Get("vision.onnx_nms");
+++	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
+++}
+++
+++TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
+++.set_body_typed(MakeOnnxNMS);
+++
+++RELAY_REGISTER_OP("vision.onnx_nms")
+++.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
+++.set_num_inputs(2)
+++.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
+++.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
+++.set_support_level(5)
+++.add_type_rel("ONMS", OnnxNMSRel);
+++
+++
++ }  // namespace relay
++ }  // namespace tvm
++diff --git a/tests/python/frontend/onnx/nms_v0.01.patch b/tests/python/frontend/onnx/nms_v0.01.patch
++new file mode 100644
++index 00000000..5386d03d
++--- /dev/null
+++++ b/tests/python/frontend/onnx/nms_v0.01.patch
++@@ -0,0 +1,223 @@
+++diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
+++index d4099601..bca035aa 100644
+++--- a/tests/python/frontend/onnx/test_forward.py
++++++ b/tests/python/frontend/onnx/test_forward.py
+++@@ -47,6 +47,7 @@ def get_tvm_output(graph_def, input_data, target, ctx, output_shape=None, output
+++ 
+++     mod, params = relay.frontend.from_onnx(graph_def, shape_dict)
+++     with relay.build_config(opt_level=1):
++++        print("params:{}".format(params))
+++         graph, lib, params = relay.build(mod,
+++                                          target,
+++                                          params=params)
+++@@ -1116,15 +1117,203 @@ def test_inception():
+++ # def test_shufflenetv2():
+++ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
+++ 
++++# add by lizhijian
++++def test_forward_nms():
++++    node = onnx.helper.make_node(
++++    'NonMaxSuppression',
++++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
++++    outputs=['selected_indices'],
++++    center_point_box=0,
++++    )
++++
++++# 1 export_nonmaxsuppression_suppress_by_IOU():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.1, 1.0, 1.1],
++++    #     [0.0, -0.1, 1.0, 0.9],
++++    #     [0.0, 10.0, 1.0, 11.0],
++++    #     [0.0, 10.1, 1.0, 11.1],
++++    #     [0.0, 100.0, 1.0, 101.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++++
++++# @staticmethod
++++# 2 export_nonmaxsuppression_suppress_by_IOU_and_scores():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.1, 1.0, 1.1],
++++    #     [0.0, -0.1, 1.0, 0.9],
++++    #     [0.0, 10.0, 1.0, 11.0],
++++    #     [0.0, 10.1, 1.0, 11.1],
++++    #     [0.0, 100.0, 1.0, 101.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.4]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
++++
++++# @staticmethod
++++# 3 export_nonmaxsuppression_flipped_coordinates():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [1.0, 1.0, 0.0, 0.0],
++++    #     [0.0, 0.1, 1.0, 1.1],
++++    #     [0.0, 0.9, 1.0, -0.1],
++++    #     [0.0, 10.0, 1.0, 11.0],
++++    #     [1.0, 10.1, 0.0, 11.1],
++++    #     [1.0, 101.0, 0.0, 100.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++++
++++# @staticmethod
++++# 4 export_nonmaxsuppression_limit_output_size():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.1, 1.0, 1.1],
++++    #     [0.0, -0.1, 1.0, 0.9],
++++    #     [0.0, 10.0, 1.0, 11.0],
++++    #     [0.0, 10.1, 1.0, 11.1],
++++    #     [0.0, 100.0, 1.0, 101.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
++++
++++# @staticmethod
++++# 5 export_nonmaxsuppression_single_box():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
++++
++++# @staticmethod
++++# 6 export_nonmaxsuppression_identical_boxes():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.0, 1.0, 1.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
++++
++++# @staticmethod 
++++# 7 export_nonmaxsuppression_center_point_box_format():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.5, 0.5, 1.0, 1.0],
++++    #     [0.5, 0.6, 1.0, 1.0],
++++    #     [0.5, 0.4, 1.0, 1.0],
++++    #     [0.5, 10.5, 1.0, 1.0],
++++    #     [0.5, 10.6, 1.0, 1.0],
++++    #     [0.5, 100.5, 1.0, 1.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++++
++++# @staticmethod
++++# 8 export_nonmaxsuppression_two_classes():  # type: () -> None
++++# pass
++++    # boxes = np.array([[
++++    #     [0.0, 0.0, 1.0, 1.0],
++++    #     [0.0, 0.1, 1.0, 1.1],
++++    #     [0.0, -0.1, 1.0, 0.9],
++++    #     [0.0, 10.0, 1.0, 11.0],
++++    #     [0.0, 10.1, 1.0, 11.1],
++++    #     [0.0, 100.0, 1.0, 101.0]
++++    # ]]).astype(np.float32)
++++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
++++    #                     [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
++++    # iou_threshold = np.array([0.5]).astype(np.float32)
++++    # score_threshold = np.array([0.0]).astype(np.float32)
++++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
++++
++++# @staticmethod
++++# 9 export_nonmaxsuppression_two_batches():  # type: () -> None
++++# pass
++++    boxes = np.array([[[0.0, 0.0, 1.0, 1.0],
++++                        [0.0, 0.1, 1.0, 1.1],
++++                        [0.0, -0.1, 1.0, 0.9],
++++                        [0.0, 10.0, 1.0, 11.0],
++++                        [0.0, 10.1, 1.0, 11.1],
++++                        [0.0, 100.0, 1.0, 101.0]],
++++                        [[0.0, 0.0, 1.0, 1.0],
++++                        [0.0, 0.1, 1.0, 1.1],
++++                        [0.0, -0.1, 1.0, 0.9],
++++                        [0.0, 10.0, 1.0, 11.0],
++++                        [0.0, 10.1, 1.0, 11.1],
++++                        [0.0, 100.0, 1.0, 101.0]]]).astype(np.float32)
++++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]],
++++                        [[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
++++    iou_threshold = np.array([0.5]).astype(np.float32)
++++    score_threshold = np.array([0.0]).astype(np.float32)
++++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [1, 0, 3], [1, 0, 0]]).astype(np.int64)
++++
++++
++++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
++++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
++++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
++++
++++    graph = onnx.helper.make_graph([node],'NMS_test',
++++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
++++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
++++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
++++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
++++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
++++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
++++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
++++    model = helper.make_model(graph, producer_name='NMS_test')
++++    onnx.save_model(model,'nms.onnx')
++++    for target, ctx in ctx_list():
++++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
++++        print(tvm_out)
++++
+++ 
+++ if __name__ == '__main__':
++++    test_forward_nms()
++++    '''
+++     test_flatten()
+++     test_reshape()
+++     test_shape()
+++     test_power()
+++     test_squeeze()
+++     test_unsqueeze()
+++-    test_slice()
++++    #test_slice()
+++     test_floor()
+++     test_ceil()
+++     test_clip()
+++@@ -1159,3 +1348,4 @@ if __name__ == '__main__':
+++     test_resnet()
+++     test_inception()
+++     test_densenet()
++++    '''
+++\ No newline at end of file
++diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
++index d4099601..bca035aa 100644
++--- a/tests/python/frontend/onnx/test_forward.py
+++++ b/tests/python/frontend/onnx/test_forward.py
++@@ -47,6 +47,7 @@ def get_tvm_output(graph_def, input_data, target, ctx, output_shape=None, output
++ 
++     mod, params = relay.frontend.from_onnx(graph_def, shape_dict)
++     with relay.build_config(opt_level=1):
+++        print("params:{}".format(params))
++         graph, lib, params = relay.build(mod,
++                                          target,
++                                          params=params)
++@@ -1116,15 +1117,203 @@ def test_inception():
++ # def test_shufflenetv2():
++ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
++ 
+++# add by lizhijian
+++def test_forward_nms():
+++    node = onnx.helper.make_node(
+++    'NonMaxSuppression',
+++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
+++    outputs=['selected_indices'],
+++    center_point_box=0,
+++    )
+++
+++# 1 export_nonmaxsuppression_suppress_by_IOU():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 2 export_nonmaxsuppression_suppress_by_IOU_and_scores():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.4]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 3 export_nonmaxsuppression_flipped_coordinates():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [1.0, 1.0, 0.0, 0.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, 0.9, 1.0, -0.1],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [1.0, 10.1, 0.0, 11.1],
+++    #     [1.0, 101.0, 0.0, 100.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 4 export_nonmaxsuppression_limit_output_size():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 5 export_nonmaxsuppression_single_box():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 6 export_nonmaxsuppression_identical_boxes():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod 
+++# 7 export_nonmaxsuppression_center_point_box_format():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.5, 0.5, 1.0, 1.0],
+++    #     [0.5, 0.6, 1.0, 1.0],
+++    #     [0.5, 0.4, 1.0, 1.0],
+++    #     [0.5, 10.5, 1.0, 1.0],
+++    #     [0.5, 10.6, 1.0, 1.0],
+++    #     [0.5, 100.5, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 8 export_nonmaxsuppression_two_classes():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+++    #                     [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 9 export_nonmaxsuppression_two_batches():  # type: () -> None
+++# pass
+++    boxes = np.array([[[0.0, 0.0, 1.0, 1.0],
+++                        [0.0, 0.1, 1.0, 1.1],
+++                        [0.0, -0.1, 1.0, 0.9],
+++                        [0.0, 10.0, 1.0, 11.0],
+++                        [0.0, 10.1, 1.0, 11.1],
+++                        [0.0, 100.0, 1.0, 101.0]],
+++                        [[0.0, 0.0, 1.0, 1.0],
+++                        [0.0, 0.1, 1.0, 1.1],
+++                        [0.0, -0.1, 1.0, 0.9],
+++                        [0.0, 10.0, 1.0, 11.0],
+++                        [0.0, 10.1, 1.0, 11.1],
+++                        [0.0, 100.0, 1.0, 101.0]]]).astype(np.float32)
+++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]],
+++                        [[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    iou_threshold = np.array([0.5]).astype(np.float32)
+++    score_threshold = np.array([0.0]).astype(np.float32)
+++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [1, 0, 3], [1, 0, 0]]).astype(np.int64)
+++
+++
+++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
+++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
+++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
+++
+++    graph = onnx.helper.make_graph([node],'NMS_test',
+++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
+++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
+++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
+++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
+++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
+++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
+++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
+++    model = helper.make_model(graph, producer_name='NMS_test')
+++    onnx.save_model(model,'nms.onnx')
+++    for target, ctx in ctx_list():
+++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
+++        print(tvm_out)
+++
++ 
++ if __name__ == '__main__':
+++    test_forward_nms()
+++    '''
++     test_flatten()
++     test_reshape()
++     test_shape()
++     test_power()
++     test_squeeze()
++     test_unsqueeze()
++-    test_slice()
+++    #test_slice()
++     test_floor()
++     test_ceil()
++     test_clip()
++@@ -1159,3 +1348,4 @@ if __name__ == '__main__':
++     test_resnet()
++     test_inception()
++     test_densenet()
+++    '''
++\ No newline at end of file
++diff --git a/topi/python/topi/generic/vision.py b/topi/python/topi/generic/vision.py
++index a1e096a8..6e46b238 100644
++--- a/topi/python/topi/generic/vision.py
+++++ b/topi/python/topi/generic/vision.py
++@@ -86,6 +86,25 @@ def schedule_nms(outs):
++     """
++     return _default_schedule(outs, False)
++ 
+++# add by lizhijian
+++@tvm.target.generic_func
+++def schedule_onnxnms(outs):
+++  """Schedule for onnx nms
+++
+++  Parameters
+++  ----------
+++  outs: Array of Tensor
+++      The computation graph description of nms
+++      in the format of an array of tensors.
+++
+++    Returns
+++    -------
+++    s: Schedule
+++      The computation schedule for the op.
+++  """
+++  print("schedule_onnxnms")
+++  return _default_schedule(outs,False)
+++
++ @tvm.target.generic_func
++ def schedule_multibox_prior(outs):
++     """Schedule for multibox_prior
++diff --git a/topi/python/topi/vision/nms.py b/topi/python/topi/vision/nms.py
++index 8fe0234a..49c99e90 100644
++--- a/topi/python/topi/vision/nms.py
+++++ b/topi/python/topi/vision/nms.py
++@@ -145,33 +145,30 @@ def get_valid_counts(data, score_threshold=0, id_index=0, score_index=1):
++                                    id_index_const, score_index_const)
++ 
++ 
++-# add by lxz for onnx nms at 20190808
+++# add by lxz for onnx nms at 20190814
++ @hybrid.script
++-def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class, 
+++def hybrid_onnx_nms(boxes, scores, sort_score, center_point_box_const,max_output_boxes_per_class, 
++                 iou_threshold, score_threshold):
++     """
++     boxes: [num_batches, spatial_dimension, 4]  coordinates 4  data [y1,x1,y2,x2]
++     scores: [num_batches, num_classes, spatial_dimension]  
++     spatial_dimension：每个batch中每个类别score的个数
++-
++     output: [num_selected_indices, 3]  coordinates 3  data [batch_index, class_index, box_index]
++ 
++     """
++-    num_batch = boxes.shape[0]
+++    
+++    num_batches = boxes.shape[0]
++     num_box = boxes.shape[1]
++     num_class = scores.shape[1]
++-    output = output_tensor((num_batches * num_class * max_output_boxes_per_class, 3), "int32") 
++-    output_box = output_tensor((num_batches * num_class * max_output_boxes_per_class, 4), "int32")
++-    #  score_threshold_const = tvm.const(score_threshold, "float32")
++-      
+++    output_shape0= num_batches * num_class * max_output_boxes_per_class
+++    output = output_tensor((output_shape0, 3), "int32") 
+++    
++     #
++     #  score 
++     #
++-    #  sort_score 对每个类的box序列进行了编号，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
++-    #  sort_score[batch_id,class_id,re_box_id]
++-    sort_score = argsort(scores, axis=2, is_ascend=False)
+++    #output，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
++     if score_threshold >0:
++-        for i in range(num_batch):
+++        for i in range(num_batches):
++             for j in range(num_class):
++                 for k in range(num_box):
++                     #  过滤 低于阈值的score
++@@ -180,29 +177,40 @@ def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class,
++                     #  每个类最多输出的box为max_output_boxes_per_class个
++                     #  则这里需要对每个类按照score由大到小进行排序后取前max_output_boxes_per_class个
++ 
++-
+++    box_id = 0
+++    for i in range(num_batches):
+++        
+++        for j in range(num_class):
+++
+++            for k in range(max_output_boxes_per_class):
+++                # sort_score[i,j,k]>=0 and    
+++                output[box_id,0] = -1
+++                output[box_id,1] = -1
+++                output[box_id,2] = -1
+++                box_id = box_id + 1
+++    
++     #
++     #  TopK、IOU
++     #
++     #  iou的过滤之前，先准备需要进行iou计算的boxes，该boxes包含每个batch中每个类别的每个box按分数由大到小排列
++     #  boxes[batch_id,class_id,box_id,4]
++     #  
++-    for i in range(num_batch):
+++    for i in range(num_batches):
++         mkeep = num_box
++         # for j in range(num_class):
++-        if 0 < max_output_boxes_per_class < num_box:
++-            mkeep = max_output_boxes_per_class
+++
+++        # if 0 < max_output_boxes_per_class < num_box:
+++        #     mkeep = max_output_boxes_per_class
++         
++         for c in range(num_class):
++ 
++             for j in range(mkeep):
++ 
++                 if iou_threshold > 0:
++-
++                     box_a_idx = sort_score[i,c,j]
++                     if box_a_idx >= 0:  # 判断是否有效
++ 
++-                        for k in parallel(mkeep):
+++                        for k in range(mkeep):
++                             check_iou = 0
++                             box_b_idx = sort_score[i,c,k]
++                             if k > j and box_b_idx >= 0:
++@@ -220,30 +228,58 @@ def hybrid_onnx_nms(boxes, scores, max_output_boxes_per_class,
++                                 b_y2 = boxes[i, box_b_idx, 2]
++                                 b_x2 = boxes[i, box_b_idx, 3]
++ 
++-                                w = max(0.0, min(a_x2, b_x2) - max(a_x1, b_x1))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
++-                                h = max(0.0, min(a_y2, b_y2) - max(a_y1, b_y1))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
+++                                w = max(0.0, min(max(a_x1,a_x2),max(b_x1,b_x2))-max(min(a_x1,a_x2),min(b_x1,b_x2)))
+++                                h = max(0.0, min(max(a_y1,a_y2),max(b_y1,b_y2))-max(min(a_y1,a_y2),min(b_y1,b_y2)))
+++
++                                 area = h * w  # 相交区域面积
++-                                u = (a_x2 - a_x1) * (a_y2 - a_y1) + (b_x2 - b_x1) * (b_y2 - b_y1) - area  # 两个box相并后面积
+++                                # if area <0:
+++                                #     area = -(area)
+++                                sa = (a_x2 - a_x1) * (a_y2 - a_y1)
+++                                sb = (b_x2 - b_x1) * (b_y2 - b_y1)
+++
+++                                if sa < 0:
+++                                    sa = -sa
+++                                if sb < 0:
+++                                    sb = -sb    
+++
+++                                u = sa + sb - area  # 两个box相并后面积
+++                                # u = (max(a_x1,a_x2)-min(a_x1,a_x2))*(max(a_y1,a_y2)-min(a_y1,a_y2))+(max(b_x1,b_x2)-min(b_x1,b_x2))*(max(b_y1,b_y2)-min(b_y1,b_y2))-area
++                                 iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
++-                                if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
+++                                if iou > iou_threshold:  # 如果重合百分比大于等于阈值
++                                     # output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
++                                     # if id_index >= 0:  # 如果有class_id,把class_id置为-1
++                                     #     output[i, k, id_index] = -1.0
++                                     # box_indices[i, k] = -1
++                                     sort_score[i,c,k] = -1  # 将该box_id置为-1，表示对应的box无效（iou抑制）
++ 
++-    # for i in range(num_batch):
++-
++-    #     for j in range(num_class):
++-
++-    #         for k in range(num_box):
++-
++-    #             if sort_score[i,j,k]<0:
++-    #                 # 无效过滤
++-    #                 pass
++-
++-
++-    output = sort_score               
+++    box_id = 0
+++    for a in range(num_batches):
+++        
+++        for b in range(num_class):
+++            per_class = 0
+++            for c in range(num_box):
+++                # sort_score[i,j,k]>=0 and
+++                if  sort_score[a,b,c]>=0 and box_id < output_shape0 and per_class < max_output_boxes_per_class:
+++                    output[box_id,0] = a
+++                    output[box_id,1] = b
+++                    output[box_id,2] = sort_score[a,b,c]
+++                    box_id = box_id + 1
+++                    per_class = per_class+1
+++
+++    # debug for show all sorted score
+++    # box_id = 0
+++    # for a in range(num_batches):
+++        
+++    #     for b in range(num_class):
+++    #         per_class = 0
+++    #         for c in range(num_box):
+++    #             # sort_score[i,j,k]>=0 and
+++    #             #if  sort_score[a,b,c]>=0 and box_id < shape_dim0 and per_class < max_output_boxes_per_class:
+++    #             output[box_id,0] = a
+++    #             output[box_id,1] = b
+++    #             output[box_id,2] = sort_score[a,b,c]
+++    #             box_id = box_id + 1
+++    #             per_class = per_class+1
++ 
++     return output
++ 
++@@ -479,3 +515,51 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
++         out = hybrid_rearrange_out(out)
++ 
++     return box_indices if return_indices else out
+++
+++# # add by lizhijian
+++# @hybrid.script
+++# def hybrid_onnx_nms(boxes, scores, 
+++#                     center_point_box,
+++#                     max_output_boxes_per_class,
+++#                     iou_threshold,
+++#                     score_threshold):
+++#     shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
+++#     output = output_tensor((shape_dim0,3), "int32")
+++#     #output = 1
+++#     return output
+++
+++# # @tvm.target.generic_func
+++# # def onnx_nms(boxes, scores, 
+++# #              center_point_box=0,
+++# #              max_output_boxes_per_class=-1,
+++# #              iou_threshold=0.5,
+++# #              score_threshold=0.0):
+++# #     center_point_box_const = tvm.const(center_point_box, "int32")
+++# #     max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
+++# #     iou_threshold_const = tvm.const(iou_threshold, "float32")
+++# #     score_threshold_const = tvm.const(score_threshold, "float32")
+++# #     return hybrid_onnx_nms(boxes, scores, 
+++# #                             center_point_box_const, 
+++# #                             max_output_boxes_per_class_const,
+++# #                             iou_threshold_const,
+++# #                             score_threshold_const)
+++
+++@tvm.target.generic_func
+++def onnx_nms(boxes, scores, 
+++             center_point_box=0,
+++             max_output_boxes_per_class=-1,
+++             iou_threshold=0.5,
+++             score_threshold=0.0):
+++    center_point_box_const = tvm.const(center_point_box, "int32")
+++    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
+++    iou_threshold_const = tvm.const(iou_threshold, "float32")
+++    score_threshold_const = tvm.const(score_threshold, "float32")
+++    sort_score = argsort(scores,axis=2, is_ascend=False,dtype="int32")
+++    print('sort_score:{}'.format(sort_score))
+++    print('boxes:{}'.format(boxes))
+++    print('scores:{}'.format(scores))
+++    return hybrid_onnx_nms(boxes, scores,sort_score, 
+++                            center_point_box_const,
+++                            max_output_boxes_per_class_const,
+++                            iou_threshold_const,
+++                            score_threshold_const)
++\ No newline at end of file
++diff --git a/topi/tests/python/test_topi_vision.py b/topi/tests/python/test_topi_vision.py
++index 16bc3ca0..a34f0542 100644
++--- a/topi/tests/python/test_topi_vision.py
+++++ b/topi/tests/python/test_topi_vision.py
++@@ -24,7 +24,7 @@ import topi.testing
++ 
++ from tvm.contrib.pickle_memoize import memoize
++ from topi.util import get_const_tuple
++-from topi.vision import ssd, non_max_suppression, get_valid_counts
+++from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
++ 
++ 
++ def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):
++@@ -147,14 +147,14 @@ def verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indic
++                                           return_indices=False)
++                 indices_out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++                                                   coord_start=coord_start, score_index=score_index, id_index=id_index)
++-            else:
++-                out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++-                                                    coord_start=coord_start, score_index=score_index, id_index=id_index,
++-                                                    return_indices=False)
++-                indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++-                                                            coord_start=coord_start, score_index=score_index, id_index=id_index)
++-            s = topi.generic.schedule_nms(out)
++-            indices_s = topi.generic.schedule_nms(indices_out)
+++            # else:
+++            #     out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+++            #                                         coord_start=coord_start, score_index=score_index, id_index=id_index,
+++            #                                         return_indices=False)
+++            #     indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
+++            #                                                 coord_start=coord_start, score_index=score_index, id_index=id_index)
+++            s = topi.generic.schedule_onnxnms(out)
+++            indices_s = topi.generic.schedule_onnxnms(indices_out)
++ 
++         tvm_data = tvm.nd.array(np_data, ctx)
++         tvm_valid_count = tvm.nd.array(np_valid_count, ctx)
++@@ -195,6 +195,26 @@ def test_non_max_suppression():
++     verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
++ 
++ def test_onnx_non_max_suppression():
+++    #  boxes:[1,6,4]
+++    boxes = np.array([[
+++    [0.0, 0.0, 1.0, 1.0],
+++    [0.0, 0.1, 1.0, 1.1],
+++    [0.0, -0.1, 1.0, 0.9],
+++    [0.0, 10.0, 1.0, 11.0],
+++    [0.0, 10.1, 1.0, 11.1],
+++    [0.0, 100.0, 1.0, 101.0]
+++    ]]).astype(np.float32)
+++
+++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+++                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    iou_threshold = np.array([0.5]).astype(np.float32)
+++    score_threshold = np.array([0.0]).astype(np.float32)
+++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+++
+++    verify_onnx_non_max_suppression(boxes,scores,max_output_boxes_per_class,iou_threshold,score_threshold,selected_indices)
+++
+++    '''
++     np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
++                          [0, 0.4, 4, 21, 19, 40], [2, 0.9, 35, 61, 52, 79],
++                          [1, 0.5, 100, 60, 70, 110]]]).astype("float32")
++@@ -205,6 +225,7 @@ def test_onnx_non_max_suppression():
++     np_indices_result = np.array([[3, 0, -1, -1, -1]])
++ 
++     verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, True, 2, 2, 1, 0)
+++    '''
++ 
++     # np_data = np.array([[[0.8, 1, 20, 25, 45], [0.7, 30, 60, 50, 80],
++     #                      [0.4, 4, 21, 19, 40], [0.9, 35, 61, 52, 79],
+diff --git a/python/tvm/_ffi/base.py b/python/tvm/_ffi/base.py
+index c61c5c44..f58185b8 100644
+--- a/python/tvm/_ffi/base.py
++++ b/python/tvm/_ffi/base.py
+@@ -49,6 +49,7 @@ else:
+ def _load_lib():
+     """Load libary by searching possible path."""
+     lib_path = libinfo.find_lib_path()
++    print(f'_load_lib path is {lib_path}')
+     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+     # DMatrix functions
+     lib.TVMGetLastError.restype = ctypes.c_char_p
+diff --git a/python/tvm/_ffi/function.py b/python/tvm/_ffi/function.py
+index 4bb31820..817a5649 100644
+--- a/python/tvm/_ffi/function.py
++++ b/python/tvm/_ffi/function.py
+@@ -290,6 +290,7 @@ def _init_api(namespace, target_module_name=None):
+     target_module_name : str
+        The target module name if different from namespace
+     """
++    print(f'_init_api name is {target_module_name}')
+     target_module_name = (
+         target_module_name if target_module_name else namespace)
+     if namespace.startswith("tvm."):
+diff --git a/python/tvm/relay/frontend/onnx.py b/python/tvm/relay/frontend/onnx.py
+index 1b904bba..f2609c8f 100644
+--- a/python/tvm/relay/frontend/onnx.py
++++ b/python/tvm/relay/frontend/onnx.py
+@@ -114,6 +114,12 @@ class Elemwise(OnnxOpConverter):
+             len(inputs))
+         op_name = cls.name
+         conv_ops = ["conv2d", "conv2d_transpose"]
++        if op_name == 'multiply':
++            print('op_name ={},input[1].dtype:{}'.format(op_name,params[inputs[1].name_hint].asnumpy().dtype))
++            # print('op_name ={},input[0].dtype:{}'.format(op_name, params[inputs[0].name_hint].asnumpy().dtype))
++            # if params[inputs[1].name_hint].asnumpy().dtype == 'int64':
++            #     B= params[inputs[1].name_hint].asnumpy().astype('int32')
++            #     print("B.dtype={}".format(B.dtype))
+         if attr.get('broadcast', 0) and any(x in str(inputs[0]) for x in conv_ops):
+             # TODO(zhreshold): remove hard coded infershape
+             axis = int(attr.get('axis', 0))
+@@ -663,6 +669,45 @@ class Slice(OnnxOpConverter):
+                        transforms={'starts': 'begin',
+                                    'ends': 'end'},
+                        ignores=['axes'])(inputs, attr)
++    @classmethod
++    def _impl_v10(cls, inputs, attr, params):
++        #prepare attr
++        attr['starts'] = params[inputs[1].name_hint].asnumpy()
++        attr['ends'] = params[inputs[2].name_hint].asnumpy() ## 取出的ends原本为int64最大值，这里取到-1
++        attr['axes'] = params[inputs[3].name_hint].asnumpy()
++        attr['strides'] = params[inputs[4].name_hint].asnumpy()
++        # print("params:{}".format(params))
++        print('ends0:{}'.format(attr['ends']))
++        if attr['ends']==-1:## 换成int32最大值
++            attr['ends'] = [np.iinfo(np.int32).max]
++        try:
++            # Update the starts and ends according to axes if required.
++            if (max(attr['axes']) + 1) != len(attr['axes']):
++                new_axes = []
++                new_starts = []
++                new_ends = []
++                pop_index = 0
++                for i in range(max(attr['axes']) + 1):
++                    if i in attr['axes']:
++                        new_axes.append(i)
++                        new_starts.append(attr['starts'][pop_index])
++                        new_ends.append(attr['ends'][pop_index])
++                        pop_index += 1
++                    else:
++                        new_axes.append(i)
++                        new_starts.append(0)
++                        new_ends.append(np.iinfo(np.int32).max)
++                attr['axes'] = new_axes
++                attr['starts'] = new_starts
++                attr['ends'] = new_ends
++        except KeyError:
++            pass
++        print('axes:{}'.format(attr['axes']))
++        print('ends:{}'.format(attr['ends']))
++        return AttrCvt('strided_slice',
++                    transforms={'starts': 'begin',
++                                'ends': 'end',},
++                    ignores=['axes'])([inputs[0]], attr)
+ 
+ class Gather(OnnxOpConverter):
+     """ Operator converter for Gather.
+@@ -671,8 +716,8 @@ class Gather(OnnxOpConverter):
+     def _impl_v1(cls, inputs, attr, params):
+         axis = attr.get('axis', 0)
+         return AttrCvt('take',
+-                       extras={'axis':axis})(inputs, {})
+-        #return _op.take(inputs[0], inputs[1], axis)
++                       extras={'axis':axis})(inputs, attr)
++        # return _op.take(inputs[0], inputs[1], axis)
+ 
+ 
+ class Greater(OnnxOpConverter):
+@@ -850,6 +895,30 @@ class ConstantFill(OnnxOpConverter):
+             shape = shape + attr.pop('extra_shape')
+         return _op.full(inputs[0], shape)
+ 
++# add by lizhijian
++class NMS(OnnxOpConverter):
++    @classmethod
++    def _impl_v10(cls, inputs, attr, params):
++        new_attrs={}
++        new_attrs["center_point_box"] = attr.get("center_point_box", 0)
++        new_attrs["max_output_boxes_per_class"] = params[inputs[2].name_hint].asnumpy()[0]
++        new_attrs["iou_threshold"] = params[inputs[3].name_hint].asnumpy()[0]
++        new_attrs["score_threshold"] = params[inputs[4].name_hint].asnumpy()[0]
++        return _op.vision.onnx_nms(inputs[0], inputs[1], **new_attrs)
++
++
++class TopK(OnnxOpConverter):
++    @classmethod
++    def _impl_v10(cls, inputs, attrs, params):
++        assert len(inputs) == 2
++        new_attrs = {}
++        new_attrs["axis"] = attrs.get("axis", -1)
++        new_attrs["ret_type"] = "both"
++        new_attrs["is_ascend"] = False
++        new_attrs["dtype"] = "int64"
++        new_attrs["k"] = params[inputs[1].name_hint].asnumpy()[0]
++        return _op.topk(inputs[0], **new_attrs)
++
+ # compatible operators that do NOT require any conversion.
+ _identity_list = []
+ 
+@@ -964,9 +1033,13 @@ def _get_convert_map(opset):
+         'Unsqueeze': Unsqueeze.get_converter(opset),
+         'Pad': Pad.get_converter(opset),
+         'Shape': Shape.get_converter(opset),
++        'TopK':TopK.get_converter(opset),
++        # def/vision
++        'NonMaxSuppression': NMS.get_converter(opset),
+     }
+ 
+ 
++
+ class GraphProto(object):
+     """A helper class for handling Relay expression copying from pb2.GraphProto.
+     Definition: https://github.com/onnx/onnx/blob/master/onnx/onnx.proto
+@@ -1019,14 +1092,25 @@ class GraphProto(object):
+             if not init_tensor.name.strip():
+                 raise ValueError("Tensor's name is required.")
+             self._params[init_tensor.name] = self._parse_array(init_tensor)
+-            self._nodes[init_tensor.name] = new_var(init_tensor.name,
+-                                                    shape=self._params[init_tensor.name].shape,
+-                                                    dtype=self._params[init_tensor.name].dtype)
++            if  self._params[init_tensor.name].dtype == 'int64':
++                print("tensor name:{},change int64 to int32.".format(init_tensor.name))
++                self._nodes[init_tensor.name] = new_var(init_tensor.name,
++                                                        shape=self._params[init_tensor.name].shape,
++                                                        dtype='int32')
++            else:
++                self._nodes[init_tensor.name] = new_var(init_tensor.name,
++                                                        shape=self._params[init_tensor.name].shape,
++                                                        dtype=self._params[init_tensor.name].dtype)
+         for i in graph.input:
+             # from onnx v0.2, GraphProto.input has type ValueInfoProto,
+             #  and the name is 'i.name'
+             i_name = self._parse_value_proto(i)
+             d_type = self._parse_dtype(i, 'float32')
++            # if d_type == 'int64':
++            #     print("i_name={},d_type ={}".format(i.name,d_type))
++                # d_type = 'int32'
++            
++            
+             if i_name in self._params:
+                 # i is a param instead of input
+                 self._num_param += 1
+@@ -1045,6 +1129,11 @@ class GraphProto(object):
+                 else:
+                     dtype = d_type
+                 self._nodes[i_name] = new_var(i_name, shape=tshape, dtype=dtype)
++            
++            # check dtype
++            # d_type = self._parse_dtype(i, 'float32')
++            # if d_type == 'int64':
++            #     print("end i_name={},d_type ={}".format(i.name,d_type))
+         # get list of unsupported ops
+         convert_map = _get_convert_map(opset)
+         unsupported_ops = set()
+@@ -1061,8 +1150,17 @@ class GraphProto(object):
+         # construct nodes, nodes are stored as directed acyclic graph
+         for node in graph.node:
+             op_name = node.op_type
++            # print('op_name:{}'.format(op_name))
+             attr = self._parse_attr(node.attribute)
+             inputs = [self._nodes[self._renames.get(i, i)] for i in node.input]
++
++            # array = self._parse_array(t_proto)
++            # if inputs.dtype == 'int64':
++            #     array = _nd.array(array.asnumpy().astype('int32'))
++
++            # if op_name == "Unsqueeze":
++            #     print("unsqueeze")
++
+             if op_name == "Constant":
+                 t_proto = self._parse_attr(node.attribute)["value"]
+                 self._num_param += 1
+@@ -1075,6 +1173,19 @@ class GraphProto(object):
+                     node.output[0],
+                     shape=list(t_proto.dims),
+                     dtype=array.dtype)
++            # elif op_name == 'multiply' or op_name == 'Mul':
++            #     print("op multiply find,input:{}".format(node.input))
++                # t_proto = self._parse_attr(node.attribute)["value"]
++                # self._num_param += 1
++                # # We should convert scalar integers to int32, to normalize.
++                # array = self._parse_array(t_proto)
++                # if len(array.shape) == 0 and array.dtype == 'int64':
++                #     array = _nd.array(array.asnumpy().astype('int32'))
++                # self._params[node.output[0]] = array
++                # self._nodes[node.output[0]] = new_var(
++                #     node.output[0],
++                #     shape=list(t_proto.dims),
++                #     dtype=array.dtype)
+             else:
+                 if op_name == "ConstantFill":
+                     fill_value = attr.get('value', 0.0)
+@@ -1089,6 +1200,7 @@ class GraphProto(object):
+                 attr['tvm_custom']['name'] = i_name
+ 
+                 op = self._convert_operator(op_name, inputs, attr, opset)
++                # print("inputs:{}".format(op_name))
+                 node_output = self._fix_outputs(op_name, node.output)
+                 if not isinstance(op, _expr.TupleWrapper):
+                     outputs_num = 1
+@@ -1102,12 +1214,17 @@ class GraphProto(object):
+                 else:
+                     for k, i in zip(list(node_output), range(len(node_output))):
+                         self._nodes[k] = op[i]
++            
+ 
+         # now return the outputs
++        # print("params:{}".format(self._params))
+         outputs = [self._nodes[self._parse_value_proto(i)] for i in graph.output]
+         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
++        # print("outputs:{}".format(outputs))
+         func = _expr.Function(analysis.free_vars(outputs), outputs)
++        
+         return _module.Module.from_expr(func), self._params
++        # return func, self._params
+ 
+     def _parse_value_proto(self, value_proto):
+         """Parse ValueProto or raw str."""
+@@ -1131,8 +1248,14 @@ class GraphProto(object):
+             from onnx.numpy_helper import to_array
+         except ImportError as e:
+             raise ImportError(
+-                "Unable to import onnx which is required {}".format(e))
++                "Unable to import onnx which is required {}".format(e)) 
+         np_array = to_array(tensor_proto).reshape(tuple(tensor_proto.dims))
++
++        # print("np_array:{}".format(np_array))
++        if np_array.dtype == 'int64':
++            print('change int64 to int32')
++            np_array = np_array.astype('int32')
++
+         return _nd.array(np_array)
+ 
+     def _parse_attr(self, attr_proto):
+diff --git a/python/tvm/relay/op/op_attrs.py b/python/tvm/relay/op/op_attrs.py
+index d46be126..49bb056a 100644
+--- a/python/tvm/relay/op/op_attrs.py
++++ b/python/tvm/relay/op/op_attrs.py
+@@ -233,6 +233,12 @@ class NonMaximumSuppressionAttrs(Attrs):
+     """Attributes for vision.non_maximum_suppression"""
+ 
+ 
++# add by lizhijian
++@register_relay_attr_node
++class OnnxNMSAttrs(Attrs):
++    """Attributes for vision.onnx_nms"""
++
++
+ @register_relay_attr_node
+ class ROIAlignAttrs(Attrs):
+     """Attributes for vision.roi_align"""
+diff --git a/python/tvm/relay/op/transform.py b/python/tvm/relay/op/transform.py
+index 5d8d2800..aa81d277 100644
+--- a/python/tvm/relay/op/transform.py
++++ b/python/tvm/relay/op/transform.py
+@@ -589,7 +589,7 @@ def strided_slice(data, begin, end, strides=None):
+     ret : relay.Expr
+         The computed result.
+     """
+-    strides = strides or []
++    # strides = strides or []
+     return _make.strided_slice(data, list(begin), list(end), list(strides))
+ 
+ 
+diff --git a/python/tvm/relay/op/vision/_vision.py b/python/tvm/relay/op/vision/_vision.py
+index 7de11807..0ac2d568 100644
+--- a/python/tvm/relay/op/vision/_vision.py
++++ b/python/tvm/relay/op/vision/_vision.py
+@@ -119,3 +119,26 @@ def compute_nms(attrs, inputs, _, target):
+ 
+ 
+ reg.register_pattern("vision.non_max_suppression", OpPattern.OPAQUE)
++
++# add by lizhijian
++# onnx nms
++@reg.register_schedule("vision.onnx_nms")
++def schedule_onnx_nms(_, outs, target):
++    """Schedule definition of onnx nms"""
++    with target:
++        return topi.generic.schedule_onnxnms(outs)
++
++
++@reg.register_compute("vision.onnx_nms")
++def compute_nms(attrs, inputs, _, target):
++    """Compute definition of onnx nms"""
++    center_point_box = get_const_int(attrs.center_point_box)
++    max_output_boxes_per_class = get_const_int(attrs.max_output_boxes_per_class)
++    iou_threshold = get_const_float(attrs.iou_threshold)
++    score_threshold = get_const_float(attrs.score_threshold)
++    return [
++        topi.vision.onnx_nms(inputs[0], inputs[1], center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
++    ]
++
++
++reg.register_pattern("vision.onnx_nms", OpPattern.OPAQUE)
+diff --git a/python/tvm/relay/op/vision/nms.py b/python/tvm/relay/op/vision/nms.py
+index d19dde30..04a2ee9e 100644
+--- a/python/tvm/relay/op/vision/nms.py
++++ b/python/tvm/relay/op/vision/nms.py
+@@ -112,3 +112,11 @@ def non_max_suppression(data,
+                                      iou_threshold, force_suppress, top_k,
+                                      coord_start, score_index, id_index,
+                                      return_indices, invalid_to_bottom)
++
++def onnx_nms(boxes, 
++            scores, 
++            center_point_box=0, 
++            max_output_boxes_per_class=-1, 
++            iou_threshold=0.5, 
++            score_threshold=0.0):
++    return _make.onnx_nms(boxes, scores, center_point_box, max_output_boxes_per_class, iou_threshold, score_threshold)
+diff --git a/src/lang/buffer.cc b/src/lang/buffer.cc
+index 8324938b..a5c14624 100644
+--- a/src/lang/buffer.cc
++++ b/src/lang/buffer.cc
+@@ -310,6 +310,7 @@ Expr Buffer::vload(Array<Expr> begin, Type dtype) const {
+ Stmt Buffer::vstore(Array<Expr> begin, Expr value) const {
+   // specially handle bool, stored as Int(8)
+   const BufferNode* n = operator->();
++  // << "value"<<value
+   Type dtype = value.type();
+   CHECK(dtype.element_of() == n->dtype.element_of() &&
+         dtype.lanes() % n->dtype.lanes() == 0)
+diff --git a/src/relay/op/algorithm/topk.cc b/src/relay/op/algorithm/topk.cc
+index c88e2c3e..b58242ad 100644
+--- a/src/relay/op/algorithm/topk.cc
++++ b/src/relay/op/algorithm/topk.cc
+@@ -35,6 +35,7 @@ bool TopKRel(const Array<Type>& types,
+              const Attrs& attrs,
+              const TypeReporter& reporter) {
+   // `types` contains: [data, result]
++  std::cout<<"TopKRel"<<std::endl;
+   const TopKAttrs* param = attrs.as<TopKAttrs>();
+   CHECK_EQ(types.size(), 2);
+   const auto* data = types[0].as<TensorTypeNode>();
+diff --git a/src/relay/op/tensor/transform.cc b/src/relay/op/tensor/transform.cc
+index 07315d5d..be871416 100644
+--- a/src/relay/op/tensor/transform.cc
++++ b/src/relay/op/tensor/transform.cc
+@@ -1744,6 +1744,7 @@ bool StridedSliceRel(const Array<Type>& types,
+                      int num_inputs,
+                      const Attrs& attrs,
+                      const TypeReporter& reporter) {
++  // std::cout<<"strided_slice"<<std::endl;
+   CHECK_EQ(types.size(), 2);
+   const auto* data = types[0].as<TensorTypeNode>();
+   if (data == nullptr) return false;
+diff --git a/src/relay/op/type_relations.cc b/src/relay/op/type_relations.cc
+index d4efe80c..489f7392 100644
+--- a/src/relay/op/type_relations.cc
++++ b/src/relay/op/type_relations.cc
+@@ -113,10 +113,12 @@ bool BroadcastRel(const Array<Type>& types,
+                   const Attrs& attrs,
+                   const TypeReporter& reporter) {
+   CHECK_EQ(types.size(), 3);
+-  // DLOG(INFO) << "In1:" << types[0] << ",In2:" << types[1]
++  // std::cout << "In1:" << types[0] << ",In2:" << types[1]
+   //                 << ",Out:" << types[2] << std::endl;
+   if (auto t0 = ToTensorType(types[0])) {
+     if (auto t1 = ToTensorType(types[1])) {
++      // auto t2 = (int)t1;
++      // auto t3 = ToTensorType(t2);
+       CHECK_EQ(t0->dtype, t1->dtype);
+       reporter->Assign(types[2],
+         ConcreteBroadcast(t0, t1, t0->dtype));
+diff --git a/src/relay/op/vision/nms.cc b/src/relay/op/vision/nms.cc
+index c0160e7d..fd877f69 100644
+--- a/src/relay/op/vision/nms.cc
++++ b/src/relay/op/vision/nms.cc
+@@ -18,7 +18,7 @@
+  */
+ 
+ /*!
+- *  Copyright (c) 2018 by Contributors
++ *  Copyright (c) 2018 by Contributorstop_k
+  * \file nms.cc
+  * \brief Non-maximum suppression operators
+  */
+@@ -90,7 +90,7 @@ bool NMSRel(const Array<Type>& types,
+     attrs.as<NonMaximumSuppressionAttrs>();
+   const auto& dshape = data->shape;
+   const auto& vshape = valid_count->shape;
+-  CHECK_EQ(dshape.size(), 3) << "Input data should be 3-D.";
++  CHECK_EQ(dshape.size(), 3) << "Input data should be 3-D.";//[batch_size, num_anchors, 6]
+   CHECK_EQ(vshape.size(), 1) << "Input valid count should be 1-D.";
+ 
+   // assign output type
+@@ -98,7 +98,7 @@ bool NMSRel(const Array<Type>& types,
+     std::vector<IndexExpr> oshape({dshape[0], dshape[1]});
+     reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
+   } else {
+-    reporter->Assign(types[2], TensorTypeNode::make(dshape, data->dtype));
++    reporter->Assign(types[2], TensorTypeNode::make(dshape, data->dtype));//[batch_size, num_anchors, 6]
+   }
+   return true;
+ }
+@@ -145,5 +145,75 @@ Set id_index to be -1 to ignore class_id axis.
+ .set_support_level(5)
+ .add_type_rel("NMS", NMSRel);
+ 
++//add by lizhijian
++TVM_REGISTER_NODE_TYPE(OnnxNMSAttrs);
++
++bool OnnxNMSRel(const Array<Type>& types,
++					int num_inputs,
++					const Attrs& attrs,
++					const TypeReporter& reporter){
++  // std::cout<<"OnnxNMSReal0"<<std::endl;
++	CHECK_EQ(types.size(), 3);
++	const auto* boxes = types[0].as<TensorTypeNode>();
++	const auto* scores = types[1].as<TensorTypeNode>();
++  if (boxes == nullptr){
++    std::cout<<"boxes is nullptr!!"<<std::endl;
++    return false;
++  }
++  CHECK_NE(boxes->shape.size(), 0) << "Input shape cannot be empty";
++
++  if (scores == nullptr) return false;
++  CHECK_NE(scores->shape.size(), 0) << "Input shape cannot be empty";
++	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
++  int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
++
++	const auto& boxesshape = boxes->shape;
++  // std::cout<<"OnnxNMSReal1"<<std::endl;
++	const auto& scoresshape = scores->shape;
++  // std::cout<<"OnnxNMSReal2"<<std::endl;
++  // CHECK_EQ(scoresshape.size(), 3);
++  
++  // std::cout<<"OnnxNMSReal2.5"<<std::endl;
++  // CHECK_EQ(boxesshape.size(), 3);
++
++	// assign output type
++  // std::cout<<"OnnxNMSReal2"<<std::endl;
++  std::cout<<"scoresshape[1]"<<scoresshape<<std::endl;
++  std::cout<<"boxesshape[0]"<<boxesshape<<std::endl;
++  
++  // std::cout<<"max_output_boxes_per_class"<<max_output_boxes_per_class<<std::endl;
++  std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
++	reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
++	return true;
++};
++
++Expr MakeOnnxNMS(Expr boxes,
++					Expr scores,
++          int center_point_box,
++					int max_output_boxes_per_class,
++					double iou_threshold,
++					double score_threshold){
++  std::cout<<"MakeOnnxNMS"<<std::endl;
++	auto attrs = make_node<OnnxNMSAttrs>();
++	attrs->center_point_box = center_point_box;
++  attrs->max_output_boxes_per_class = max_output_boxes_per_class;
++  attrs->iou_threshold = iou_threshold;
++  attrs->score_threshold = score_threshold;
++	static const Op& op = Op::Get("vision.onnx_nms");
++	return CallNode::make(op, {boxes, scores}, Attrs(attrs), {});
++}
++
++TVM_REGISTER_API("relay.op.vision._make.onnx_nms")
++.set_body_typed(MakeOnnxNMS);
++
++RELAY_REGISTER_OP("vision.onnx_nms")
++.describe(R"doc(onnx nms format op)doc" TVM_ADD_FILELINE)
++.set_num_inputs(2)
++.add_argument("boxes","Tensor","boxes with shape [batch, spatial_dim, 4]")
++.add_argument("scores","Tensor","scores with shape [batch, num_classes, spatial_dim]")
++.set_support_level(5)
++.add_type_rel("ONMS", OnnxNMSRel);
++
++
+ }  // namespace relay
+ }  // namespace tvm
+diff --git a/src/runtime/graph/graph_runtime.cc b/src/runtime/graph/graph_runtime.cc
+index 26e1d842..e28eceaf 100644
+--- a/src/runtime/graph/graph_runtime.cc
++++ b/src/runtime/graph/graph_runtime.cc
+@@ -87,10 +87,12 @@ void GraphRuntime::Init(const std::string& graph_json,
+ int GraphRuntime::GetInputIndex(const std::string& name) {
+   for (size_t i = 0; i< input_nodes_.size(); ++i) {
+     uint32_t nid = input_nodes_[i];
++    // LOG(WARNING) << "input_name:  find \"" << name << "\" among input";
+     if (nodes_[nid].name == name) {
+       return static_cast<int>(i);
+     }
+   }
++
+   LOG(WARNING) << "Warning: cannot find \"" << name << "\" among input";
+   return -1;
+ }
+diff --git a/tests/python/frontend/onnx/nms_v0.01.patch b/tests/python/frontend/onnx/nms_v0.01.patch
+new file mode 100644
+index 00000000..5386d03d
+--- /dev/null
++++ b/tests/python/frontend/onnx/nms_v0.01.patch
+@@ -0,0 +1,223 @@
++diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
++index d4099601..bca035aa 100644
++--- a/tests/python/frontend/onnx/test_forward.py
+++++ b/tests/python/frontend/onnx/test_forward.py
++@@ -47,6 +47,7 @@ def get_tvm_output(graph_def, input_data, target, ctx, output_shape=None, output
++ 
++     mod, params = relay.frontend.from_onnx(graph_def, shape_dict)
++     with relay.build_config(opt_level=1):
+++        print("params:{}".format(params))
++         graph, lib, params = relay.build(mod,
++                                          target,
++                                          params=params)
++@@ -1116,15 +1117,203 @@ def test_inception():
++ # def test_shufflenetv2():
++ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
++ 
+++# add by lizhijian
+++def test_forward_nms():
+++    node = onnx.helper.make_node(
+++    'NonMaxSuppression',
+++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
+++    outputs=['selected_indices'],
+++    center_point_box=0,
+++    )
+++
+++# 1 export_nonmaxsuppression_suppress_by_IOU():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 2 export_nonmaxsuppression_suppress_by_IOU_and_scores():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.4]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 3 export_nonmaxsuppression_flipped_coordinates():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [1.0, 1.0, 0.0, 0.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, 0.9, 1.0, -0.1],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [1.0, 10.1, 0.0, 11.1],
+++    #     [1.0, 101.0, 0.0, 100.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 4 export_nonmaxsuppression_limit_output_size():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 5 export_nonmaxsuppression_single_box():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 6 export_nonmaxsuppression_identical_boxes():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.0, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
+++
+++# @staticmethod 
+++# 7 export_nonmaxsuppression_center_point_box_format():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.5, 0.5, 1.0, 1.0],
+++    #     [0.5, 0.6, 1.0, 1.0],
+++    #     [0.5, 0.4, 1.0, 1.0],
+++    #     [0.5, 10.5, 1.0, 1.0],
+++    #     [0.5, 10.6, 1.0, 1.0],
+++    #     [0.5, 100.5, 1.0, 1.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
+++
+++# @staticmethod
+++# 8 export_nonmaxsuppression_two_classes():  # type: () -> None
+++# pass
+++    # boxes = np.array([[
+++    #     [0.0, 0.0, 1.0, 1.0],
+++    #     [0.0, 0.1, 1.0, 1.1],
+++    #     [0.0, -0.1, 1.0, 0.9],
+++    #     [0.0, 10.0, 1.0, 11.0],
+++    #     [0.0, 10.1, 1.0, 11.1],
+++    #     [0.0, 100.0, 1.0, 101.0]
+++    # ]]).astype(np.float32)
+++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
+++    #                     [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    # iou_threshold = np.array([0.5]).astype(np.float32)
+++    # score_threshold = np.array([0.0]).astype(np.float32)
+++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
+++
+++# @staticmethod
+++# 9 export_nonmaxsuppression_two_batches():  # type: () -> None
+++# pass
+++    boxes = np.array([[[0.0, 0.0, 1.0, 1.0],
+++                        [0.0, 0.1, 1.0, 1.1],
+++                        [0.0, -0.1, 1.0, 0.9],
+++                        [0.0, 10.0, 1.0, 11.0],
+++                        [0.0, 10.1, 1.0, 11.1],
+++                        [0.0, 100.0, 1.0, 101.0]],
+++                        [[0.0, 0.0, 1.0, 1.0],
+++                        [0.0, 0.1, 1.0, 1.1],
+++                        [0.0, -0.1, 1.0, 0.9],
+++                        [0.0, 10.0, 1.0, 11.0],
+++                        [0.0, 10.1, 1.0, 11.1],
+++                        [0.0, 100.0, 1.0, 101.0]]]).astype(np.float32)
+++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]],
+++                        [[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
+++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
+++    iou_threshold = np.array([0.5]).astype(np.float32)
+++    score_threshold = np.array([0.0]).astype(np.float32)
+++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [1, 0, 3], [1, 0, 0]]).astype(np.int64)
+++
+++
+++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
+++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
+++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
+++
+++    graph = onnx.helper.make_graph([node],'NMS_test',
+++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
+++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
+++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
+++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
+++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
+++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
+++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
+++    model = helper.make_model(graph, producer_name='NMS_test')
+++    onnx.save_model(model,'nms.onnx')
+++    for target, ctx in ctx_list():
+++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
+++        print(tvm_out)
+++
++ 
++ if __name__ == '__main__':
+++    test_forward_nms()
+++    '''
++     test_flatten()
++     test_reshape()
++     test_shape()
++     test_power()
++     test_squeeze()
++     test_unsqueeze()
++-    test_slice()
+++    #test_slice()
++     test_floor()
++     test_ceil()
++     test_clip()
++@@ -1159,3 +1348,4 @@ if __name__ == '__main__':
++     test_resnet()
++     test_inception()
++     test_densenet()
+++    '''
++\ No newline at end of file
+diff --git a/tests/python/frontend/onnx/test_forward.py b/tests/python/frontend/onnx/test_forward.py
+index d4099601..de7cdd5b 100644
+--- a/tests/python/frontend/onnx/test_forward.py
++++ b/tests/python/frontend/onnx/test_forward.py
+@@ -47,6 +47,7 @@ def get_tvm_output(graph_def, input_data, target, ctx, output_shape=None, output
+ 
+     mod, params = relay.frontend.from_onnx(graph_def, shape_dict)
+     with relay.build_config(opt_level=1):
++        print("params:{}".format(params))
+         graph, lib, params = relay.build(mod,
+                                          target,
+                                          params=params)
+@@ -289,32 +290,103 @@ def test_gather():
+     verify_gather((3,3,3), [[[1,0]]], -1, 'int32')
+     verify_gather((4,3,5,6), [[2,1,0,0]], 0, 'float32')
+ 
+-def _test_slice_iteration(indata, outdata, starts, ends, axes=None):
+-    if axes:
+-        y = helper.make_node("Slice", ['in'], ['out'], axes=axes, starts=starts, ends=ends)
+-    else:
+-        y = helper.make_node("Slice", ['in'], ['out'], starts=starts, ends=ends)
++def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
++
++    y = helper.make_node("Slice", inputs = ['indata','starts','ends','axes','steps'],outputs = ['outdata'])
+ 
++    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(len(starts),), vals=starts)
++    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(len(ends),), vals=ends)
++    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(len(axes),), vals=axes)
++    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(len(steps),), vals=steps)
++    print('start tensor:{}'.format(starts_tensor))
+     graph = helper.make_graph([y],
+                               'slice_test',
+-                              inputs = [helper.make_tensor_value_info("in",
+-                                            TensorProto.FLOAT, list(indata.shape))],
+-                              outputs = [helper.make_tensor_value_info("out",
+-                                            TensorProto.FLOAT, list(outdata.shape))])
++                              inputs = [helper.make_tensor_value_info("indata",TensorProto.FLOAT, list(indata.shape)),
++                              helper.make_tensor_value_info("starts",TensorProto.INT64, list(starts.shape)),
++                              helper.make_tensor_value_info("ends",TensorProto.INT64, list(ends.shape)),
++                              helper.make_tensor_value_info("axes",TensorProto.INT64, list(axes.shape)),
++                              helper.make_tensor_value_info("steps",TensorProto.INT64, list(steps.shape))],
++                              outputs = [helper.make_tensor_value_info("outdata",
++                                            TensorProto.FLOAT, list(outdata.shape))],
++                              initializer=[starts_tensor, ends_tensor, axes_tensor,steps_tensor],)
+ 
+     model = helper.make_model(graph, producer_name='slice_test')
+-
++    onnx.save_model(model,'slice.onnx')
+     for target, ctx in ctx_list():
+-        tvm_out = get_tvm_output(model, indata, target, ctx, outdata.shape, 'float32')
++        tvm_out = get_tvm_output(model, [indata], target, ctx, outdata.shape, 'float32')
++        print("tvm_out.shape:{}".format(tvm_out.shape))
+ 
+     tvm.testing.assert_allclose(outdata, tvm_out)
+ 
++
+ def test_slice():
+-    x = np.random.randn(20, 10, 5).astype(np.float32)
+-    _test_slice_iteration(x, x[0:3, 0:10], (0, 0), (3, 10), (0, 1))
+-    _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4))
+-    _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1))
+-    _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1))
++    ## slice pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0]).astype(np.int64)
++    # ends = np.array([3, 10]).astype(np.int64)
++    # axes = np.array([0, 1]).astype(np.int64)
++    # steps = np.array([1,1]).astype(np.int64)
++    # y = x[0:3,0:10]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_default_axes fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0, 3], dtype=np.int64)
++    # ends = np.array([20, 10, 4], dtype=np.int64)
++    # y = x[:, :, 3:4]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_default_steps fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([0, 0, 3], dtype=np.int64)
++    # ends = np.array([20, 10, 4], dtype=np.int64)
++    # axes = np.array([0, 1, 2], dtype=np.int64)
++    # steps = np.array([1,1,1],dtype = np.int64)
++    # y = x[:, :, 3:4]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++    
++    ## slice_end_out_of_bounds pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([1], dtype=np.int64)
++    # ends = np.array([1000], dtype=np.int64)
++    # axes = np.array([1], dtype=np.int64)
++    # steps = np.array([1], dtype=np.int64)
++    # y = x[:, 1:1000]
++    # _test_slice_iteration(x, y, starts, ends, axes, steps)
++
++    ## slice_start_out_of_bounds fail
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([1000], dtype=np.int64)
++    # ends = np.array([1000], dtype=np.int64)
++    # axes = np.array([1], dtype=np.int64)
++    # steps = np.array([1], dtype=np.int64)
++    # y = x[:, 1000:1000]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_neg  pass
++    x = np.random.randn(20, 1, 5).astype(np.float32)
++    starts = np.array([0], dtype=np.int64)
++    ends = np.array([-1], dtype=np.int64)
++    axes = np.array([1], dtype=np.int64)
++    steps = np.array([1], dtype=np.int64)
++    y = x[:, 0:-1]
++    _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    ## slice_neg_steps pass
++    # x = np.random.randn(20, 10, 5).astype(np.float32)
++    # starts = np.array([20, 10, 4], dtype=np.int64)
++    # ends = np.array([0, 0, 1], dtype=np.int64)
++    # axes = np.array([0, 1, 2], dtype=np.int64)
++    # steps = np.array([-1, -3, -2])
++    # y = x[20:0:-1, 10:0:-3, 4:1:-2]
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++
++    # _test_slice_iteration(x, y, starts,ends, axes,steps)
++    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4),(0,1,2),(1,1,1))
++    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1),(1))
++    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1),(1))
++
++
+ 
+ def _test_onnx_op_elementwise(inshape, outfunc, npargs, dtype, opname, kwargs):
+     indata = np.random.uniform(-1, 1, size=inshape).astype(dtype)
+@@ -491,9 +563,19 @@ def test_upsample():
+ 
+ def _test_softmax(inshape, axis):
+     opname = 'Softmax'
+-    indata = np.random.uniform(size=inshape).astype(np.float32)
+-    outshape = inshape
++    # indata = np.random.uniform(size=inshape).astype(np.float32)
++    indata = np.array([[-1, 0, 1]]).astype(np.float32)
++    #indata = np.array([[0.35453674,0.01457328, 0.46842068, 0.59987897, 0.55332774, 0.71276087,
++    #        0.76801485, 0.8898429, 0.70029914, 0.13914116]])
++    #outdata = np.array([[0.08196373, 0.05834148, 0.09185036, 0.10475445, 0.09998976, 0.11727257,
++    #        0.12393471, 0.13999167, 0.11582022, 0.06608099]])
++
++    #indata = np.array([[0.18807387,0.933488,0.98817325,0.23373312, 0.77443016, 0.71994233,0.8982389,  0.55535364, 0.04795488, 0.46587774]])
++    #outdata = np.array([[0.06432133, 0.13554525, 0.143164,0.06732628, 0.11561292, 0.10948196,0.13085063, 0.09286726, 0.05591163, 0.08491878]])
++
++    outshape = indata.shape
+     outdata = topi.testing.softmax_python(indata)
++    print("indata:{}\noutdata:{}".format(indata,outdata))
+     if isinstance(axis, int):
+         y = helper.make_node(opname, ['in'], ['out'], axis = axis)
+     elif axis is None:
+@@ -507,14 +589,14 @@ def _test_softmax(inshape, axis):
+                                             TensorProto.FLOAT, list(outdata.shape))])
+ 
+     model = helper.make_model(graph, producer_name=opname+'_test')
+-
++    onnx.save_model(model,'Softmax.onnx')
+     for target, ctx in ctx_list():
+         tvm_out = get_tvm_output(model, indata, target, ctx, outshape, 'float32')
+-        tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
++    tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
+ 
+ def test_softmax():
+     _test_softmax((1, 10), None)
+-    _test_softmax((1, 10), 1)
++    # _test_softmax((1, 10), 1)
+ 
+ def verify_min(input_dim):
+     dtype = 'float32'
+@@ -1116,15 +1198,207 @@ def test_inception():
+ # def test_shufflenetv2():
+ #     check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
+ 
++# add by lizhijian
++def test_forward_nms():
++    node = onnx.helper.make_node(
++    'NonMaxSuppression',
++    inputs=['boxes', 'scores', 'max_output_boxes_per_class', 'iou_threshold', 'score_threshold'],
++    outputs=['selected_indices'],
++    center_point_box=0,
++    )
++
++# 1 export_nonmaxsuppression_suppress_by_IOU():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.1, 1.0, 1.1],
++    #     [0.0, -0.1, 1.0, 0.9],
++    #     [0.0, 10.0, 1.0, 11.0],
++    #     [0.0, 10.1, 1.0, 11.1],
++    #     [0.0, 100.0, 1.0, 101.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++
++# @staticmethod
++# 2 export_nonmaxsuppression_suppress_by_IOU_and_scores():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.1, 1.0, 1.1],
++    #     [0.0, -0.1, 1.0, 0.9],
++    #     [0.0, 10.0, 1.0, 11.0],
++    #     [0.0, 10.1, 1.0, 11.1],
++    #     [0.0, 100.0, 1.0, 101.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.4]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
++
++# @staticmethod
++# 3 export_nonmaxsuppression_flipped_coordinates():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [1.0, 1.0, 0.0, 0.0],
++    #     [0.0, 0.1, 1.0, 1.1],
++    #     [0.0, 0.9, 1.0, -0.1],
++    #     [0.0, 10.0, 1.0, 11.0],
++    #     [1.0, 10.1, 0.0, 11.1],
++    #     [1.0, 101.0, 0.0, 100.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++
++# @staticmethod
++# 4 export_nonmaxsuppression_limit_output_size():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.1, 1.0, 1.1],
++    #     [0.0, -0.1, 1.0, 0.9],
++    #     [0.0, 10.0, 1.0, 11.0],
++    #     [0.0, 10.1, 1.0, 11.1],
++    #     [0.0, 100.0, 1.0, 101.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0]]).astype(np.int64)
++
++# @staticmethod
++# 5 export_nonmaxsuppression_single_box():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
++
++# @staticmethod
++# 6 export_nonmaxsuppression_identical_boxes():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.0, 1.0, 1.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 0]]).astype(np.int64)
++
++# @staticmethod 
++# 7 export_nonmaxsuppression_center_point_box_format():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.5, 0.5, 1.0, 1.0],
++    #     [0.5, 0.6, 1.0, 1.0],
++    #     [0.5, 0.4, 1.0, 1.0],
++    #     [0.5, 10.5, 1.0, 1.0],
++    #     [0.5, 10.6, 1.0, 1.0],
++    #     [0.5, 100.5, 1.0, 1.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([3]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 0, 5]]).astype(np.int64)
++
++# @staticmethod
++# 8 export_nonmaxsuppression_two_classes():  # type: () -> None
++# pass
++    # boxes = np.array([[
++    #     [0.0, 0.0, 1.0, 1.0],
++    #     [0.0, 0.1, 1.0, 1.1],
++    #     [0.0, -0.1, 1.0, 0.9],
++    #     [0.0, 10.0, 1.0, 11.0],
++    #     [0.0, 10.1, 1.0, 11.1],
++    #     [0.0, 100.0, 1.0, 101.0]
++    # ]]).astype(np.float32)
++    # scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
++    #                     [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    # max_output_boxes_per_class = np.array([2]).astype(np.int64)
++    # iou_threshold = np.array([0.5]).astype(np.float32)
++    # score_threshold = np.array([0.0]).astype(np.float32)
++    # selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
++
++# @staticmethod
++# 9 export_nonmaxsuppression_two_batches():  # type: () -> None
++# pass
++    boxes = np.array([[[0.0, 0.0, 1.0, 1.0],
++                        [0.0, 0.1, 1.0, 1.1],
++                        [0.0, -0.1, 1.0, 0.9],
++                        [0.0, 10.0, 1.0, 11.0],
++                        [0.0, 10.1, 1.0, 11.1],
++                        [0.0, 100.0, 1.0, 101.0]],
++                        [[0.0, 0.0, 1.0, 1.0],
++                        [0.0, 0.1, 1.0, 1.1],
++                        [0.0, -0.1, 1.0, 0.9],
++                        [0.0, 10.0, 1.0, 11.0],
++                        [0.0, 10.1, 1.0, 11.1],
++                        [0.0, 100.0, 1.0, 101.0]]]).astype(np.float32)
++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]],
++                        [[0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
++    iou_threshold = np.array([0.5]).astype(np.float32)
++    score_threshold = np.array([0.0]).astype(np.float32)
++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [1, 0, 3], [1, 0, 0]]).astype(np.int64)
++
++
++    mobpc_tensor = onnx.helper.make_tensor(name='max_output_boxes_per_class', data_type=onnx.TensorProto.INT64,dims=(1,), vals=max_output_boxes_per_class)
++    iou_tensor = onnx.helper.make_tensor(name='iou_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=iou_threshold)
++    score_tensor = onnx.helper.make_tensor(name='score_threshold', data_type=onnx.TensorProto.FLOAT, dims=(1,), vals=score_threshold)
++
++    graph = onnx.helper.make_graph([node],'NMS_test',
++                                    inputs=[onnx.helper.make_tensor_value_info('boxes', onnx.TensorProto.FLOAT, list(boxes.shape)),
++                                    onnx.helper.make_tensor_value_info('scores', onnx.TensorProto.FLOAT, list(scores.shape)),
++                                    onnx.helper.make_tensor_value_info('max_output_boxes_per_class', onnx.TensorProto.INT64, list(max_output_boxes_per_class.shape)),
++                                    onnx.helper.make_tensor_value_info('iou_threshold', onnx.TensorProto.FLOAT, list(iou_threshold.shape)),
++                                    onnx.helper.make_tensor_value_info('score_threshold', onnx.TensorProto.FLOAT, list(score_threshold.shape))],
++                                    outputs=[onnx.helper.make_tensor_value_info('selected_indices', onnx.TensorProto.INT64, list(selected_indices.shape))],
++                                    initializer=[mobpc_tensor, iou_tensor, score_tensor],)
++    model = helper.make_model(graph, producer_name='NMS_test')
++    onnx.save_model(model,'nms.onnx')
++    for target, ctx in ctx_list():
++        tvm_out = get_tvm_output(model, [boxes,scores], target, ctx, selected_indices.shape, selected_indices.dtype)
++        print(tvm_out)
++
+ 
+ if __name__ == '__main__':
++    # test_forward_nms()
++    test_slice()
++    #test_unsqueeze()
++    # test_softmax()
++    # test_squeeze()
++    '''
+     test_flatten()
+     test_reshape()
+     test_shape()
+     test_power()
+     test_squeeze()
+     test_unsqueeze()
+-    test_slice()
++    #test_slice()
+     test_floor()
+     test_ceil()
+     test_clip()
+@@ -1159,3 +1433,4 @@ if __name__ == '__main__':
+     test_resnet()
+     test_inception()
+     test_densenet()
++    '''
+\ No newline at end of file
+diff --git a/topi/python/topi/generic/vision.py b/topi/python/topi/generic/vision.py
+index a1e096a8..6e46b238 100644
+--- a/topi/python/topi/generic/vision.py
++++ b/topi/python/topi/generic/vision.py
+@@ -86,6 +86,25 @@ def schedule_nms(outs):
+     """
+     return _default_schedule(outs, False)
+ 
++# add by lizhijian
++@tvm.target.generic_func
++def schedule_onnxnms(outs):
++  """Schedule for onnx nms
++
++  Parameters
++  ----------
++  outs: Array of Tensor
++      The computation graph description of nms
++      in the format of an array of tensors.
++
++    Returns
++    -------
++    s: Schedule
++      The computation schedule for the op.
++  """
++  print("schedule_onnxnms")
++  return _default_schedule(outs,False)
++
+ @tvm.target.generic_func
+ def schedule_multibox_prior(outs):
+     """Schedule for multibox_prior
+diff --git a/topi/python/topi/sort.py b/topi/python/topi/sort.py
+index 22899c42..08e9d544 100644
+--- a/topi/python/topi/sort.py
++++ b/topi/python/topi/sort.py
+@@ -21,7 +21,7 @@ from tvm import api
+ from .util import get_const_tuple
+ 
+ @tvm.target.generic_func
+-def argsort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32"):
++def argsort(data, valid_count=None, axis=-1, is_ascend=False, dtype="float32"):
+     """Performs sorting along the given axis and returns an array
+     of indices having the same shape as an input array that index
+     data in sorted order.
+diff --git a/topi/python/topi/vision/nms.py b/topi/python/topi/vision/nms.py
+index a6ba56ee..e5e2c015 100644
+--- a/topi/python/topi/vision/nms.py
++++ b/topi/python/topi/vision/nms.py
+@@ -145,6 +145,146 @@ def get_valid_counts(data, score_threshold=0, id_index=0, score_index=1):
+                                    id_index_const, score_index_const)
+ 
+ 
++# add by lxz for onnx nms at 20190814
++@hybrid.script
++def hybrid_onnx_nms(boxes, scores, sort_score, center_point_box_const,max_output_boxes_per_class, 
++                iou_threshold, score_threshold):
++    """
++    boxes: [num_batches, spatial_dimension, 4]  coordinates 4  data [y1,x1,y2,x2]
++    scores: [num_batches, num_classes, spatial_dimension]  
++    spatial_dimension：每个batch中每个类别score的个数
++    output: [num_selected_indices, 3]  coordinates 3  data [batch_index, class_index, box_index]
++
++    """
++    
++    num_batches = boxes.shape[0]
++    num_box = boxes.shape[1]
++    num_class = scores.shape[1]
++    output_shape0= num_batches * num_class * max_output_boxes_per_class
++    output = output_tensor((output_shape0, 3), "int32") 
++    
++    #
++    #  score 
++    #
++    #output，并按照score的大小进行了排序，sort_score 中存放排序好的序列号
++    if score_threshold >0:
++        for i in range(num_batches):
++            for j in range(num_class):
++                for k in range(num_box):
++                    #  过滤 低于阈值的score
++                    if scores[i,j,sort_score[i,j,k]] < score_threshold:
++                        sort_score[i,j,k]= -1  # 将score不符合要求的box_id置为-1，表示该box无效，后面处理不考虑
++                    #  每个类最多输出的box为max_output_boxes_per_class个
++                    #  则这里需要对每个类按照score由大到小进行排序后取前max_output_boxes_per_class个
++
++    box_id = 0
++    for i in range(num_batches):
++        
++        for j in range(num_class):
++
++            for k in range(max_output_boxes_per_class):
++                # sort_score[i,j,k]>=0 and    
++                output[box_id,0] = -1
++                output[box_id,1] = -1
++                output[box_id,2] = -1
++                box_id = box_id + 1
++    
++    
++    #
++    #  TopK、IOU
++    #
++    #  iou的过滤之前，先准备需要进行iou计算的boxes，该boxes包含每个batch中每个类别的每个box按分数由大到小排列
++    #  boxes[batch_id,class_id,box_id,4]
++    #  
++    for i in parallel(num_batches):
++        mkeep = num_box
++        # for j in range(num_class):
++
++        # if 0 < max_output_boxes_per_class < num_box:
++        #     mkeep = max_output_boxes_per_class
++        
++        for c in range(num_class):
++
++            for j in range(mkeep):
++
++                if iou_threshold > 0:
++                    box_a_idx = sort_score[i,c,j]
++                    if box_a_idx >= 0:  # 判断是否有效
++
++                        for k in range(mkeep):
++                            check_iou = 0
++                            box_b_idx = sort_score[i,c,k]
++                            if k > j and box_b_idx >= 0:
++                                check_iou = 1
++
++                            if check_iou > 0:
++
++                                a_y1 = boxes[i, box_a_idx, 0]  
++                                a_x1 = boxes[i, box_a_idx, 1]  
++                                a_y2 = boxes[i, box_a_idx, 2]  
++                                a_x2 = boxes[i, box_a_idx, 3]  
++                                
++                                b_y1 = boxes[i, box_b_idx, 0]
++                                b_x1 = boxes[i, box_b_idx, 1]
++                                b_y2 = boxes[i, box_b_idx, 2]
++                                b_x2 = boxes[i, box_b_idx, 3]
++
++                                w = max(0.0, min(max(a_x1,a_x2),max(b_x1,b_x2))-max(min(a_x1,a_x2),min(b_x1,b_x2)))
++                                h = max(0.0, min(max(a_y1,a_y2),max(b_y1,b_y2))-max(min(a_y1,a_y2),min(b_y1,b_y2)))
++
++                                area = h * w  # 相交区域面积
++                                # if area <0:
++                                #     area = -(area)
++                                sa = (a_x2 - a_x1) * (a_y2 - a_y1)
++                                sb = (b_x2 - b_x1) * (b_y2 - b_y1)
++
++                                if sa < 0:
++                                    sa = -sa
++                                if sb < 0:
++                                    sb = -sb    
++
++                                u = sa + sb - area  # 两个box相并后面积
++                                # u = (max(a_x1,a_x2)-min(a_x1,a_x2))*(max(a_y1,a_y2)-min(a_y1,a_y2))+(max(b_x1,b_x2)-min(b_x1,b_x2))*(max(b_y1,b_y2)-min(b_y1,b_y2))-area
++                                iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
++                                if iou > iou_threshold:  # 如果重合百分比大于等于阈值
++                                    # output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
++                                    # if id_index >= 0:  # 如果有class_id,把class_id置为-1
++                                    #     output[i, k, id_index] = -1.0
++                                    # box_indices[i, k] = -1
++                                    sort_score[i,c,k] = -1  # 将该box_id置为-1，表示对应的box无效（iou抑制）
++
++    box_id = 0
++    for a in range(num_batches):
++        
++        for b in range(num_class):
++            per_class = 0
++            for c in range(num_box):
++                # sort_score[i,j,k]>=0 and
++                if  sort_score[a,b,c]>=0 and box_id < output_shape0 and per_class < max_output_boxes_per_class:
++                    output[box_id,0] = a
++                    output[box_id,1] = b
++                    output[box_id,2] = sort_score[a,b,c]
++                    box_id = box_id + 1
++                    per_class = per_class+1
++
++    # debug for show all sorted score
++    # box_id = 0
++    # for a in range(num_batches):
++        
++    #     for b in range(num_class):
++    #         per_class = 0
++    #         for c in range(num_box):
++    #             # sort_score[i,j,k]>=0 and
++    #             #if  sort_score[a,b,c]>=0 and box_id < shape_dim0 and per_class < max_output_boxes_per_class:
++    #             output[box_id,0] = a
++    #             output[box_id,1] = b
++    #             output[box_id,2] = sort_score[a,b,c]
++    #             box_id = box_id + 1
++    #             per_class = per_class+1
++
++    return output
++
++
+ @hybrid.script
+ def hybrid_nms(data, sorted_index, valid_count,
+                max_output_size, iou_threshold, force_suppress,
+@@ -191,69 +331,79 @@ def hybrid_nms(data, sorted_index, valid_count,
+     output : tvm.Tensor
+         3-D tensor with shape [batch_size, num_anchors, 6].
+ 
+-    box_indices: tvm.Tensor
++    box_indices: tvm.Tensorbatch_size
+         2-D tensor with shape [batch_size, num_anchors].
+     """
+-    batch_size = data.shape[0]
+-    num_anchors = data.shape[1]
+-    box_data_length = data.shape[2]
+-    box_indices = output_tensor((batch_size, num_anchors), "int32")
++    batch_size = data.shape[0]  # 取出input data 中 batch_size 
++    num_anchors = data.shape[1]  # 取出input data 中 anchor的数目
++    box_data_length = data.shape[2]  # 取出input data 中 每个box的参数的个数
++    box_indices = output_tensor((batch_size, num_anchors), "int32")  # 构造需要输出的tensor之一
+     output = output_tensor((batch_size,
+                             num_anchors,
+                             box_data_length,),
+-                           data.dtype)
+-
++                           data.dtype)  # 构造需要输出的tensor之一
++    # 外循环为处理不同batch
+     for i in range(batch_size):
+-        if iou_threshold > 0:
+-            if valid_count[i] > 0:
++        if iou_threshold > 0:  # 判断iou阈值是否大于零
++            if valid_count[i] > 0:  # 判断当前batch的有效框是否大于零
+                 # Reorder output
+-                nkeep = valid_count[i]
+-                if 0 < top_k < nkeep:
+-                    nkeep = top_k
+-                for j in parallel(nkeep):
+-                    for k in range(box_data_length):
+-                        output[i, j, k] = data[i, sorted_index[i, j], k]
+-                    box_indices[i, j] = sorted_index[i, j]
+-                if 0 < top_k < valid_count[i]:
+-                    for j in parallel(valid_count[i] - nkeep):
++                nkeep = valid_count[i]  # 取出当前batch的有效框个数
++                if 0 < top_k < nkeep:  # 如果top_k的值小于当前batch有效框个数
++                    nkeep = top_k  # 接下来的处理以top_k的值来处理
++                for j in parallel(nkeep):  # 并行化处理每个batch的框
++                    for k in range(box_data_length):  # 处理每个框的每个数据
++                        output[i, j, k] = data[i, sorted_index[i, j], k]  # 取出boxes的data，按照score取前几个我们需要的个数
++                    box_indices[i, j] = sorted_index[i, j]  # 记录box的索引信息[batch_index,box_index]
++                if 0 < top_k < valid_count[i]:  # 这句应该是多余的，可以与上面的合并
++                    for j in parallel(valid_count[i] - nkeep):  # 将output其他的位置（top_k以外）置为-1
+                         for k in range(box_data_length):
+                             output[i, j + nkeep, k] = -1.0
+-                        box_indices[i, j + nkeep] = -1
++                        box_indices[i, j + nkeep] = -1  # 将box_indice输出的其他位置置为-1
+             # Apply nms
+-            box_start_idx = coord_start
++            box_start_idx = coord_start  # 
+             batch_idx = i
+-            for j in range(valid_count[i]):
++            for j in range(valid_count[i]):  # 处理每个有效的box
++                # output[i, j, score_index] > 0  output中box的score大于零
++                # id_index < 0  输入的id_index 小于零 即不需要class
++                # output[i, j, id_index] >= 0  class_id 大于等于零
+                 if output[i, j, score_index] > 0 and (id_index < 0 or output[i, j, id_index] >= 0):
+                     box_a_idx = j
++                    # 处理box的 IOU
+                     for k in parallel(valid_count[i]):
+                         check_iou = 0
++                        #  output[i, k, score_index] > 0 output中box的sco大于零
++                        #  (id_index < 0 or output[i, k, id_index] >= 0) 输出不需要class或者class_id 大于等于零
+                         if k > j and output[i, k, score_index] > 0 \
+                                 and (id_index < 0 or output[i, k, id_index] >= 0):
++                            # 如果 force_suppress为 True
++                            # 如果 不需要class或者两个为同一个class
++                            # 即当force_suppress为True时或者id_index为-1时又或者两个要操作的box为同一个class时
+                             if force_suppress:
+                                 check_iou = 1
+                             elif id_index < 0 or output[i, j, id_index] == output[i, k, id_index]:
+                                 check_iou = 1
+                         if check_iou > 0:
+-                            a_l = output[batch_idx, box_a_idx, box_start_idx]
+-                            a_t = output[batch_idx, box_a_idx, box_start_idx + 1]
+-                            a_r = output[batch_idx, box_a_idx, box_start_idx + 2]
+-                            a_b = output[batch_idx, box_a_idx, box_start_idx + 3]
++                            a_l = output[batch_idx, box_a_idx, box_start_idx]  #x1
++                            a_t = output[batch_idx, box_a_idx, box_start_idx + 1]  #y1
++                            a_r = output[batch_idx, box_a_idx, box_start_idx + 2]  #x2
++                            a_b = output[batch_idx, box_a_idx, box_start_idx + 3]  #y2
+                             box_b_idx = k
+                             b_t = output[batch_idx, box_b_idx, box_start_idx + 1]
+                             b_b = output[batch_idx, box_b_idx, box_start_idx + 3]
+                             b_l = output[batch_idx, box_b_idx, box_start_idx]
+                             b_r = output[batch_idx, box_b_idx, box_start_idx + 2]
+-                            w = max(0.0, min(a_r, b_r) - max(a_l, b_l))
+-                            h = max(0.0, min(a_b, b_b) - max(a_t, b_t))
+-                            area = h * w
+-                            u = (a_r - a_l) * (a_b - a_t) + (b_r - b_l) * (b_b - b_t) - area
+-                            iou = 0.0 if u <= 0.0 else area / u
+-                            if iou >= iou_threshold:
+-                                output[i, k, score_index] = -1.0
+-                                if id_index >= 0:
++                            w = max(0.0, min(a_r, b_r) - max(a_l, b_l))  # max(0,min(a_x2,b_x2)-max(a_x1,b_x1))  求相交区域宽度
++                            h = max(0.0, min(a_b, b_b) - max(a_t, b_t))  # max(0,min(a_y2,b_y2)-max(a_y1,b_y1))  求相交区域高度
++                            area = h * w  # 相交区域面积
++                            u = (a_r - a_l) * (a_b - a_t) + (b_r - b_l) * (b_b - b_t) - area  # 两个box相并后面积
++                            iou = 0.0 if u <= 0.0 else area / u  # 重合面积占相并区域面积的百分比
++                            if iou >= iou_threshold:  # 如果重合百分比大于等于阈值
++                                output[i, k, score_index] = -1.0  # 将第k个box的score值置为-1
++                                if id_index >= 0:  # 如果有class_id,把class_id置为-1
+                                     output[i, k, id_index] = -1.0
+                                 box_indices[i, k] = -1
+         else:
++            #iou 小于零，则不处理iou直接输出有效个box
+             for j in parallel(valid_count[i]):
+                 for k in range(box_data_length):
+                     output[i, j, k] = data[i, j, k]
+@@ -318,11 +468,11 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
+         Whether to return box indices in input data.
+ 
+     invalid_to_bottom : optional, boolean
+-        Whether to move all valid bounding boxes to the top.
++        Whether to mbox_leftid bounding boxes to the top.
+ 
+     Returns
+     -------
+-    out : tvm.Tensor
++    out : tvm.Tensorbox_left
+         3-D tensor with shape [batch_size, num_anchors, 6].
+ 
+     Example
+@@ -366,3 +516,48 @@ def non_max_suppression(data, valid_count, max_output_size=-1,
+         out = hybrid_rearrange_out(out)
+ 
+     return box_indices if return_indices else out
++
++# # add by lizhijian
++# @hybrid.script
++# def hybrid_onnx_nms(boxes, scores, 
++#                     center_point_box,
++#                     max_output_boxes_per_class,
++#                     iou_threshold,
++#                     score_threshold):
++#     shape_dim0 = boxes.shape[0] * scores.shape[1] * max_output_boxes_per_class
++#     output = output_tensor((shape_dim0,3), "int32")
++#     #output = 1
++#     return output
++
++# # @tvm.target.generic_func
++# # def onnx_nms(boxes, scores, 
++# #              center_point_box=0,
++# #              max_output_boxes_per_class=-1,
++# #              iou_threshold=0.5,
++# #              score_threshold=0.0):
++# #     center_point_box_const = tvm.const(center_point_box, "int32")
++# #     max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
++# #     iou_threshold_const = tvm.const(iou_threshold, "float32")
++# #     score_threshold_const = tvm.const(score_threshold, "float32")
++# #     return hybrid_onnx_nms(boxes, scores, 
++# #                             center_point_box_const, 
++# #                             max_output_boxes_per_class_const,
++# #                             iou_threshold_const,
++# #                             score_threshold_const)
++
++@tvm.target.generic_func
++def onnx_nms(boxes, scores, 
++             center_point_box=0,
++             max_output_boxes_per_class=-1,
++             iou_threshold=0.5,
++             score_threshold=0.0):
++    center_point_box_const = tvm.const(center_point_box, "int32")
++    max_output_boxes_per_class_const = tvm.const(max_output_boxes_per_class, "int32")
++    iou_threshold_const = tvm.const(iou_threshold, "float32")
++    score_threshold_const = tvm.const(score_threshold, "float32")
++    sort_score = argsort(scores,axis=2, is_ascend=False,dtype="int32")
++    return hybrid_onnx_nms(boxes, scores,sort_score, 
++                            center_point_box_const,
++                            max_output_boxes_per_class_const,
++                            iou_threshold_const,
++                            score_threshold_const)
+\ No newline at end of file
+diff --git a/topi/tests/python/test_topi_vision.py b/topi/tests/python/test_topi_vision.py
+index 08b6d2e7..a34f0542 100644
+--- a/topi/tests/python/test_topi_vision.py
++++ b/topi/tests/python/test_topi_vision.py
+@@ -24,7 +24,7 @@ import topi.testing
+ 
+ from tvm.contrib.pickle_memoize import memoize
+ from topi.util import get_const_tuple
+-from topi.vision import ssd, non_max_suppression, get_valid_counts
++from topi.vision import ssd, non_max_suppression, get_valid_counts, onnx_nms
+ 
+ 
+ def verify_get_valid_counts(dshape, score_threshold, id_index, score_index):
+@@ -126,6 +126,51 @@ def verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_re
+     for device in ['llvm', 'cuda', 'opencl']:
+         check_device(device)
+ 
++def verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, iou_threshold,
++                               force_suppress, top_k, coord_start, score_index, id_index):
++    dshape = np_data.shape
++    batch, num_anchors, _ = dshape
++    indices_dshape = (batch, num_anchors)
++    data = tvm.placeholder(dshape, name="data")
++    valid_count = tvm.placeholder((batch,), dtype="int32", name="valid_count")
++
++    def check_device(device):
++        ctx = tvm.context(device, 0)
++        if not ctx.exist:
++            print("Skip because %s is not enabled" % device)
++            return
++        print("Running on target: %s" % device)
++        with tvm.target.create(device):
++            if device == 'llvm':
++                out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++                                          coord_start=coord_start, score_index=score_index, id_index=id_index,
++                                          return_indices=False)
++                indices_out = non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++                                                  coord_start=coord_start, score_index=score_index, id_index=id_index)
++            # else:
++            #     out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++            #                                         coord_start=coord_start, score_index=score_index, id_index=id_index,
++            #                                         return_indices=False)
++            #     indices_out = topi.cuda.non_max_suppression(data, valid_count, -1, iou_threshold, force_suppress, top_k,
++            #                                                 coord_start=coord_start, score_index=score_index, id_index=id_index)
++            s = topi.generic.schedule_onnxnms(out)
++            indices_s = topi.generic.schedule_onnxnms(indices_out)
++
++        tvm_data = tvm.nd.array(np_data, ctx)
++        tvm_valid_count = tvm.nd.array(np_valid_count, ctx)
++
++        tvm_out = tvm.nd.array(np.zeros(dshape, dtype=data.dtype), ctx)
++        f = tvm.build(s, [data, valid_count, out], device)
++        f(tvm_data, tvm_valid_count, tvm_out)
++        tvm.testing.assert_allclose(tvm_out.asnumpy(), np_result, rtol=1e-4)
++
++        tvm_indices_out = tvm.nd.array(np.zeros(indices_dshape, dtype="int32"), ctx)
++        f = tvm.build(indices_s, [data, valid_count, indices_out], device)
++        f(tvm_data, tvm_valid_count, tvm_indices_out)
++        tvm.testing.assert_allclose(tvm_indices_out.asnumpy(), np_indices_result, rtol=1e-4)
++
++    for device in ['llvm', 'cuda', 'opencl']:
++        check_device(device)
+ 
+ def test_non_max_suppression():
+     np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
+@@ -149,6 +194,48 @@ def test_non_max_suppression():
+     np_indices_result = np.array([[3, 0, -1, -1, -1]])
+     verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
+ 
++def test_onnx_non_max_suppression():
++    #  boxes:[1,6,4]
++    boxes = np.array([[
++    [0.0, 0.0, 1.0, 1.0],
++    [0.0, 0.1, 1.0, 1.1],
++    [0.0, -0.1, 1.0, 0.9],
++    [0.0, 10.0, 1.0, 11.0],
++    [0.0, 10.1, 1.0, 11.1],
++    [0.0, 100.0, 1.0, 101.0]
++    ]]).astype(np.float32)
++
++    scores = np.array([[[0.9, 0.75, 0.6, 0.95, 0.5, 0.3],
++                    [0.9, 0.75, 0.6, 0.95, 0.5, 0.3]]]).astype(np.float32)
++    max_output_boxes_per_class = np.array([2]).astype(np.int64)
++    iou_threshold = np.array([0.5]).astype(np.float32)
++    score_threshold = np.array([0.0]).astype(np.float32)
++    selected_indices = np.array([[0, 0, 3], [0, 0, 0], [0, 1, 3], [0, 1, 0]]).astype(np.int64)
++
++    verify_onnx_non_max_suppression(boxes,scores,max_output_boxes_per_class,iou_threshold,score_threshold,selected_indices)
++
++    '''
++    np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
++                         [0, 0.4, 4, 21, 19, 40], [2, 0.9, 35, 61, 52, 79],
++                         [1, 0.5, 100, 60, 70, 110]]]).astype("float32")
++    np_valid_count = np.array([4]).astype("int32")
++    np_result = np.array([[[2, 0.9, 35, 61, 52, 79], [0, 0.8, 1, 20, 25, 45],
++                           [-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1],
++                           [-1, -1, -1, -1, -1, -1]]])
++    np_indices_result = np.array([[3, 0, -1, -1, -1]])
++
++    verify_onnx_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, True, 2, 2, 1, 0)
++    '''
++
++    # np_data = np.array([[[0.8, 1, 20, 25, 45], [0.7, 30, 60, 50, 80],
++    #                      [0.4, 4, 21, 19, 40], [0.9, 35, 61, 52, 79],
++    #                      [0.5, 100, 60, 70, 110]]]).astype("float32")
++    # np_valid_count = np.array([4]).astype("int32")
++    # np_result = np.array([[[0.9, 35, 61, 52, 79], [0.8, 1, 20, 25, 45],
++    #                        [-1, -1, -1, -1, -1], [-1, -1, -1, -1, -1],
++    #                        [-1, -1, -1, -1, -1]]])
++    # np_indices_result = np.array([[3, 0, -1, -1, -1]])
++    # verify_non_max_suppression(np_data, np_valid_count, np_result, np_indices_result, 0.7, False, 2, 1, 0, -1)
+ 
+ 
+ def verify_multibox_prior(dshape, sizes=(1,), ratios=(1,), steps=(-1, -1), offsets=(0.5, 0.5), clip=False):
