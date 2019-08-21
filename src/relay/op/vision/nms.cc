@@ -152,18 +152,36 @@ bool OnnxNMSRel(const Array<Type>& types,
 					int num_inputs,
 					const Attrs& attrs,
 					const TypeReporter& reporter){
-  std::cout<<"OnnxNMSReal"<<std::endl;
+  // std::cout<<"OnnxNMSReal0"<<std::endl;
 	CHECK_EQ(types.size(), 3);
 	const auto* boxes = types[0].as<TensorTypeNode>();
 	const auto* scores = types[1].as<TensorTypeNode>();
+  if (boxes == nullptr){
+    std::cout<<"boxes is nullptr!!"<<std::endl;
+    return false;
+  }
+  CHECK_NE(boxes->shape.size(), 0) << "Input shape cannot be empty";
 
+  if (scores == nullptr) return false;
+  CHECK_NE(scores->shape.size(), 0) << "Input shape cannot be empty";
 	const OnnxNMSAttrs* param = attrs.as<OnnxNMSAttrs>();
   int max_output_boxes_per_class = static_cast<int>(param->max_output_boxes_per_class);
 
 	const auto& boxesshape = boxes->shape;
+  // std::cout<<"OnnxNMSReal1"<<std::endl;
 	const auto& scoresshape = scores->shape;
+  // std::cout<<"OnnxNMSReal2"<<std::endl;
+  // CHECK_EQ(scoresshape.size(), 3);
+  
+  // std::cout<<"OnnxNMSReal2.5"<<std::endl;
+  // CHECK_EQ(boxesshape.size(), 3);
 
 	// assign output type
+  // std::cout<<"OnnxNMSReal2"<<std::endl;
+  std::cout<<"scoresshape[1]"<<scoresshape<<std::endl;
+  std::cout<<"boxesshape[0]"<<boxesshape<<std::endl;
+  
+  // std::cout<<"max_output_boxes_per_class"<<max_output_boxes_per_class<<std::endl;
   std::vector<IndexExpr> oshape({boxesshape[0] * scoresshape[1] * max_output_boxes_per_class, 3});
 	reporter->Assign(types[2], TensorTypeNode::make(oshape, Int(32)));
 	return true;

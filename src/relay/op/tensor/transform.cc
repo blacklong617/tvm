@@ -1744,6 +1744,7 @@ bool StridedSliceRel(const Array<Type>& types,
                      int num_inputs,
                      const Attrs& attrs,
                      const TypeReporter& reporter) {
+  // std::cout<<"strided_slice"<<std::endl;
   CHECK_EQ(types.size(), 2);
   const auto* data = types[0].as<TensorTypeNode>();
   if (data == nullptr) return false;

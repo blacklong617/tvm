@@ -35,6 +35,7 @@ bool TopKRel(const Array<Type>& types,
              const Attrs& attrs,
              const TypeReporter& reporter) {
   // `types` contains: [data, result]
+  std::cout<<"TopKRel"<<std::endl;
   const TopKAttrs* param = attrs.as<TopKAttrs>();
   CHECK_EQ(types.size(), 2);
   const auto* data = types[0].as<TensorTypeNode>();

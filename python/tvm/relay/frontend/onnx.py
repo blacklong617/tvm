@@ -113,10 +113,10 @@ class Elemwise(OnnxOpConverter):
         assert len(inputs) == 2, "Math op take 2 inputs, {} given".format(
             len(inputs))
         op_name = cls.name
-        B =0 
         conv_ops = ["conv2d", "conv2d_transpose"]
         if op_name == 'multiply':
             print('op_name ={},input[1].dtype:{}'.format(op_name,params[inputs[1].name_hint].asnumpy().dtype))
+            # print('op_name ={},input[0].dtype:{}'.format(op_name, params[inputs[0].name_hint].asnumpy().dtype))
             # if params[inputs[1].name_hint].asnumpy().dtype == 'int64':
             #     B= params[inputs[1].name_hint].asnumpy().astype('int32')
             #     print("B.dtype={}".format(B.dtype))
@@ -671,44 +671,15 @@ class Slice(OnnxOpConverter):
                        ignores=['axes'])(inputs, attr)
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
-        # attr['starts'] = params[inputs[1].name_hint].asnumpy()[0]
-        # attr['ends'] = params[inputs[2].name_hint].asnumpy()[0]
-        # attr['axes'] = params[inputs[3].name_hint].asnumpy()[0]
-        # attr['strides'] = params[inputs[4].name_hint].asnumpy()[0]
-        # #print("slice axes type {} ".format((attr['axes'])))
-        # #print("slice starts type {} ".format((attr['starts'])))
-        # print("slice input {} ".format(inputs[1:]))
-        # '''
-        # if (max(attr['axes'])+1) != len(attr['axes']):
-        #     new_axes = []
-        #     new_starts = []
-        #     new_ends = []
-        #     pop_index = 0
-        #     for i in range(max( attr['axes'])+1):
-        #         if i in attr['axes']:
-        #             new_axes.append(i)
-        #             new_starts.append(attr['starts'][pop_index])
-        #             new_ends.append(attr['ends'][pop_index])
-        #             pop_index += 1
-        #         else:
-        #             new_axes.append(i)
-        #             new_starts.append(0)
-        #             new_ends.append(np.iinfo(np.int32).max)
-        #     attr['axes'] = new_axes
-        #     attr['starts'] = new_starts
-        #     attr['ends'] = new_ends
-        # '''
-
-        # return AttrCvt('strided_slice',
-        #                transforms={'starts': 'begin',
-        #                            'ends': 'end'},
-        #                ignores=['axes'])([inputs[0]], attr)
-
         #prepare attr
         attr['starts'] = params[inputs[1].name_hint].asnumpy()
-        attr['ends'] = params[inputs[2].name_hint].asnumpy()
+        attr['ends'] = params[inputs[2].name_hint].asnumpy() ## 取出的ends原本为int64最大值，这里取到-1
         attr['axes'] = params[inputs[3].name_hint].asnumpy()
         attr['strides'] = params[inputs[4].name_hint].asnumpy()
+        # print("params:{}".format(params))
+        print('ends0:{}'.format(attr['ends']))
+        if attr['ends']==-1:## 换成int32最大值
+            attr['ends'] = [np.iinfo(np.int32).max]
         try:
             # Update the starts and ends according to axes if required.
             if (max(attr['axes']) + 1) != len(attr['axes']):
@@ -731,7 +702,8 @@ class Slice(OnnxOpConverter):
                 attr['ends'] = new_ends
         except KeyError:
             pass
-
+        print('axes:{}'.format(attr['axes']))
+        print('ends:{}'.format(attr['ends']))
         return AttrCvt('strided_slice',
                     transforms={'starts': 'begin',
                                 'ends': 'end',},
@@ -1120,16 +1092,24 @@ class GraphProto(object):
             if not init_tensor.name.strip():
                 raise ValueError("Tensor's name is required.")
             self._params[init_tensor.name] = self._parse_array(init_tensor)
-            self._nodes[init_tensor.name] = new_var(init_tensor.name,
-                                                    shape=self._params[init_tensor.name].shape,
-                                                    dtype=self._params[init_tensor.name].dtype)
+            if  self._params[init_tensor.name].dtype == 'int64':
+                print("tensor name:{},change int64 to int32.".format(init_tensor.name))
+                self._nodes[init_tensor.name] = new_var(init_tensor.name,
+                                                        shape=self._params[init_tensor.name].shape,
+                                                        dtype='int32')
+            else:
+                self._nodes[init_tensor.name] = new_var(init_tensor.name,
+                                                        shape=self._params[init_tensor.name].shape,
+                                                        dtype=self._params[init_tensor.name].dtype)
         for i in graph.input:
             # from onnx v0.2, GraphProto.input has type ValueInfoProto,
             #  and the name is 'i.name'
             i_name = self._parse_value_proto(i)
             d_type = self._parse_dtype(i, 'float32')
-            # if i.dtype == 'int64':
-            #     i = i.astype('int32')
+            # if d_type == 'int64':
+            #     print("i_name={},d_type ={}".format(i.name,d_type))
+                # d_type = 'int32'
+            
             
             if i_name in self._params:
                 # i is a param instead of input
@@ -1149,6 +1129,11 @@ class GraphProto(object):
                 else:
                     dtype = d_type
                 self._nodes[i_name] = new_var(i_name, shape=tshape, dtype=dtype)
+            
+            # check dtype
+            # d_type = self._parse_dtype(i, 'float32')
+            # if d_type == 'int64':
+            #     print("end i_name={},d_type ={}".format(i.name,d_type))
         # get list of unsupported ops
         convert_map = _get_convert_map(opset)
         unsupported_ops = set()
@@ -1165,12 +1150,16 @@ class GraphProto(object):
         # construct nodes, nodes are stored as directed acyclic graph
         for node in graph.node:
             op_name = node.op_type
+            # print('op_name:{}'.format(op_name))
             attr = self._parse_attr(node.attribute)
             inputs = [self._nodes[self._renames.get(i, i)] for i in node.input]
 
             # array = self._parse_array(t_proto)
             # if inputs.dtype == 'int64':
             #     array = _nd.array(array.asnumpy().astype('int32'))
+
+            # if op_name == "Unsqueeze":
+            #     print("unsqueeze")
 
             if op_name == "Constant":
                 t_proto = self._parse_attr(node.attribute)["value"]
@@ -1211,6 +1200,7 @@ class GraphProto(object):
                 attr['tvm_custom']['name'] = i_name
 
                 op = self._convert_operator(op_name, inputs, attr, opset)
+                # print("inputs:{}".format(op_name))
                 node_output = self._fix_outputs(op_name, node.output)
                 if not isinstance(op, _expr.TupleWrapper):
                     outputs_num = 1
@@ -1230,8 +1220,11 @@ class GraphProto(object):
         # print("params:{}".format(self._params))
         outputs = [self._nodes[self._parse_value_proto(i)] for i in graph.output]
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
+        # print("outputs:{}".format(outputs))
         func = _expr.Function(analysis.free_vars(outputs), outputs)
+        
         return _module.Module.from_expr(func), self._params
+        # return func, self._params
 
     def _parse_value_proto(self, value_proto):
         """Parse ValueProto or raw str."""
@@ -1259,9 +1252,9 @@ class GraphProto(object):
         np_array = to_array(tensor_proto).reshape(tuple(tensor_proto.dims))
 
         # print("np_array:{}".format(np_array))
-        # if np_array.dtype == 'int64':
-        #     print('np_array == int32')
-        #     np_array = np_array.astype('int32')
+        if np_array.dtype == 'int64':
+            print('change int64 to int32')
+            np_array = np_array.astype('int32')
 
         return _nd.array(np_array)
 

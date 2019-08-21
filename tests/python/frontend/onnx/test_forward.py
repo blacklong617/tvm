@@ -294,17 +294,18 @@ def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
 
     y = helper.make_node("Slice", inputs = ['indata','starts','ends','axes','steps'],outputs = ['outdata'])
 
-    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(2,), vals=starts)
-    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(2,), vals=ends)
-    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(2,), vals=axes)
-    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(2,), vals=steps)
+    starts_tensor = onnx.helper.make_tensor(name='starts', data_type=onnx.TensorProto.INT64,dims=(len(starts),), vals=starts)
+    ends_tensor = onnx.helper.make_tensor(name='ends', data_type=onnx.TensorProto.INT64, dims=(len(ends),), vals=ends)
+    axes_tensor = onnx.helper.make_tensor(name='axes', data_type=onnx.TensorProto.INT64, dims=(len(axes),), vals=axes)
+    steps_tensor = onnx.helper.make_tensor(name='steps', data_type=onnx.TensorProto.INT64, dims=(len(steps),), vals=steps)
+    print('start tensor:{}'.format(starts_tensor))
     graph = helper.make_graph([y],
                               'slice_test',
                               inputs = [helper.make_tensor_value_info("indata",TensorProto.FLOAT, list(indata.shape)),
-                              helper.make_tensor_value_info("starts",TensorProto.FLOAT, list(starts.shape)),
-                              helper.make_tensor_value_info("ends",TensorProto.FLOAT, list(ends.shape)),
-                              helper.make_tensor_value_info("axes",TensorProto.FLOAT, list(axes.shape)),
-                              helper.make_tensor_value_info("steps",TensorProto.FLOAT, list(steps.shape))],
+                              helper.make_tensor_value_info("starts",TensorProto.INT64, list(starts.shape)),
+                              helper.make_tensor_value_info("ends",TensorProto.INT64, list(ends.shape)),
+                              helper.make_tensor_value_info("axes",TensorProto.INT64, list(axes.shape)),
+                              helper.make_tensor_value_info("steps",TensorProto.INT64, list(steps.shape))],
                               outputs = [helper.make_tensor_value_info("outdata",
                                             TensorProto.FLOAT, list(outdata.shape))],
                               initializer=[starts_tensor, ends_tensor, axes_tensor,steps_tensor],)
@@ -313,21 +314,79 @@ def _test_slice_iteration(indata, outdata, starts, ends, axes,steps):
     onnx.save_model(model,'slice.onnx')
     for target, ctx in ctx_list():
         tvm_out = get_tvm_output(model, [indata], target, ctx, outdata.shape, 'float32')
-        print("tvm_out:{}".format(tvm_out))
+        print("tvm_out.shape:{}".format(tvm_out.shape))
 
     tvm.testing.assert_allclose(outdata, tvm_out)
 
 
 def test_slice():
-    x = np.random.randn(20, 10, 5).astype(np.float32)
-    starts = np.array([0, 0]).astype(np.int64)
-    ends = np.array([3, 10]).astype(np.int64)
-    axes = np.array([0, 1]).astype(np.int64)
-    steps = np.array([1,1]).astype(np.int64)
-    _test_slice_iteration(x, x[0:3, 0:10], starts,ends, axes,steps)
-    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4))
-    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1))
-    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1))
+    ## slice pass
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([0, 0]).astype(np.int64)
+    # ends = np.array([3, 10]).astype(np.int64)
+    # axes = np.array([0, 1]).astype(np.int64)
+    # steps = np.array([1,1]).astype(np.int64)
+    # y = x[0:3,0:10]
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+
+    ## slice_default_axes fail
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([0, 0, 3], dtype=np.int64)
+    # ends = np.array([20, 10, 4], dtype=np.int64)
+    # y = x[:, :, 3:4]
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+
+    ## slice_default_steps fail
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([0, 0, 3], dtype=np.int64)
+    # ends = np.array([20, 10, 4], dtype=np.int64)
+    # axes = np.array([0, 1, 2], dtype=np.int64)
+    # steps = np.array([1,1,1],dtype = np.int64)
+    # y = x[:, :, 3:4]
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+    
+    ## slice_end_out_of_bounds pass
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([1], dtype=np.int64)
+    # ends = np.array([1000], dtype=np.int64)
+    # axes = np.array([1], dtype=np.int64)
+    # steps = np.array([1], dtype=np.int64)
+    # y = x[:, 1:1000]
+    # _test_slice_iteration(x, y, starts, ends, axes, steps)
+
+    ## slice_start_out_of_bounds fail
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([1000], dtype=np.int64)
+    # ends = np.array([1000], dtype=np.int64)
+    # axes = np.array([1], dtype=np.int64)
+    # steps = np.array([1], dtype=np.int64)
+    # y = x[:, 1000:1000]
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+
+    ## slice_neg  pass
+    x = np.random.randn(20, 1, 5).astype(np.float32)
+    starts = np.array([0], dtype=np.int64)
+    ends = np.array([-1], dtype=np.int64)
+    axes = np.array([1], dtype=np.int64)
+    steps = np.array([1], dtype=np.int64)
+    y = x[:, 0:-1]
+    _test_slice_iteration(x, y, starts,ends, axes,steps)
+
+    ## slice_neg_steps pass
+    # x = np.random.randn(20, 10, 5).astype(np.float32)
+    # starts = np.array([20, 10, 4], dtype=np.int64)
+    # ends = np.array([0, 0, 1], dtype=np.int64)
+    # axes = np.array([0, 1, 2], dtype=np.int64)
+    # steps = np.array([-1, -3, -2])
+    # y = x[20:0:-1, 10:0:-3, 4:1:-2]
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+
+    # _test_slice_iteration(x, y, starts,ends, axes,steps)
+    # _test_slice_iteration(x, x[:, :, 3:4], (0, 0, 3), (20, 10, 4),(0,1,2),(1,1,1))
+    # _test_slice_iteration(x, x[:, 1:1000], (1), (1000), (1),(1))
+    # _test_slice_iteration(x, x[:, 0:-1], (0), (-1), (1),(1))
+
+
 
 def _test_onnx_op_elementwise(inshape, outfunc, npargs, dtype, opname, kwargs):
     indata = np.random.uniform(-1, 1, size=inshape).astype(dtype)
@@ -504,9 +563,19 @@ def test_upsample():
 
 def _test_softmax(inshape, axis):
     opname = 'Softmax'
-    indata = np.random.uniform(size=inshape).astype(np.float32)
-    outshape = inshape
+    # indata = np.random.uniform(size=inshape).astype(np.float32)
+    indata = np.array([[-1, 0, 1]]).astype(np.float32)
+    #indata = np.array([[0.35453674,0.01457328, 0.46842068, 0.59987897, 0.55332774, 0.71276087,
+    #        0.76801485, 0.8898429, 0.70029914, 0.13914116]])
+    #outdata = np.array([[0.08196373, 0.05834148, 0.09185036, 0.10475445, 0.09998976, 0.11727257,
+    #        0.12393471, 0.13999167, 0.11582022, 0.06608099]])
+
+    #indata = np.array([[0.18807387,0.933488,0.98817325,0.23373312, 0.77443016, 0.71994233,0.8982389,  0.55535364, 0.04795488, 0.46587774]])
+    #outdata = np.array([[0.06432133, 0.13554525, 0.143164,0.06732628, 0.11561292, 0.10948196,0.13085063, 0.09286726, 0.05591163, 0.08491878]])
+
+    outshape = indata.shape
     outdata = topi.testing.softmax_python(indata)
+    print("indata:{}\noutdata:{}".format(indata,outdata))
     if isinstance(axis, int):
         y = helper.make_node(opname, ['in'], ['out'], axis = axis)
     elif axis is None:
@@ -520,14 +589,14 @@ def _test_softmax(inshape, axis):
                                             TensorProto.FLOAT, list(outdata.shape))])
 
     model = helper.make_model(graph, producer_name=opname+'_test')
-
+    onnx.save_model(model,'Softmax.onnx')
     for target, ctx in ctx_list():
         tvm_out = get_tvm_output(model, indata, target, ctx, outshape, 'float32')
-        tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
+    tvm.testing.assert_allclose(outdata, tvm_out, rtol=1e-5, atol=1e-5)
 
 def test_softmax():
     _test_softmax((1, 10), None)
-    _test_softmax((1, 10), 1)
+    # _test_softmax((1, 10), 1)
 
 def verify_min(input_dim):
     dtype = 'float32'
@@ -1317,8 +1386,11 @@ def test_forward_nms():
 
 
 if __name__ == '__main__':
-    test_forward_nms()
-    # test_slice()
+    # test_forward_nms()
+    test_slice()
+    #test_unsqueeze()
+    # test_softmax()
+    # test_squeeze()
     '''
     test_flatten()
     test_reshape()

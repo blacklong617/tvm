@@ -113,10 +113,12 @@ bool BroadcastRel(const Array<Type>& types,
                   const Attrs& attrs,
                   const TypeReporter& reporter) {
   CHECK_EQ(types.size(), 3);
-  std::cout << "In1:" << types[0] << ",In2:" << types[1]
-                  << ",Out:" << types[2] << std::endl;
+  // std::cout << "In1:" << types[0] << ",In2:" << types[1]
+  //                 << ",Out:" << types[2] << std::endl;
   if (auto t0 = ToTensorType(types[0])) {
     if (auto t1 = ToTensorType(types[1])) {
+      // auto t2 = (int)t1;
+      // auto t3 = ToTensorType(t2);
       CHECK_EQ(t0->dtype, t1->dtype);
       reporter->Assign(types[2],
         ConcreteBroadcast(t0, t1, t0->dtype));
